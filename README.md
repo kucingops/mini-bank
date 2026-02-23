@@ -71,7 +71,17 @@ cd transaction-service && mvn spring-boot:run
 cd fraud-service && mvn spring-boot:run
 ```
 
-## 📡 API Endpoints
+## � Swagger UI (API Docs)
+
+Each service exposes interactive API documentation via Swagger UI:
+
+| Service | Swagger UI |
+|---|---|
+| Account Service | [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html) |
+| Transaction Service | [http://localhost:8082/swagger-ui.html](http://localhost:8082/swagger-ui.html) |
+| Fraud & Audit Service | [http://localhost:8083/swagger-ui.html](http://localhost:8083/swagger-ui.html) |
+
+## �📡 API Endpoints
 
 ### Account Service (:8081)
 | Method | Endpoint | Description |

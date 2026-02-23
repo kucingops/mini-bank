@@ -1,0 +1,34 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: fraud-service
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  elasticsearch:
+    uris: http://localhost:9200
+
+# Redis Stream configuration
+redis:
+  stream:
+    transfer-requested: transfer-requested
+    transfer-validated: transfer-validated
+    transfer-rejected: transfer-rejected
+    consumer-group: fraud-service-group
+
+# Fraud detection rules
+fraud:
+  rules:
+    large-amount-threshold: 50000000
+    max-transfers-per-hour: 10
+    suspicious-hours-start: 0
+    suspicious-hours-end: 5
+
+logging:
+  level:
+    com.minibank: DEBUG

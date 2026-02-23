@@ -1,0 +1,36 @@
+# ===========================================
+# Blacklist everything, then whitelist sources
+# ===========================================
+
+# Block everything
+*
+
+# --------------- Root files ----------------
+!.gitignore
+!README.md
+!docker-compose.yml
+
+# --------------- Init DB -------------------
+!init-db/
+!init-db/**
+
+# --------------- Account Service -----------
+!account-service/
+!account-service/pom.xml
+!account-service/Dockerfile
+!account-service/src/
+!account-service/src/**
+
+# --------------- Transaction Service -------
+!transaction-service/
+!transaction-service/pom.xml
+!transaction-service/Dockerfile
+!transaction-service/src/
+!transaction-service/src/**
+
+# --------------- Fraud Service -------------
+!fraud-service/
+!fraud-service/pom.xml
+!fraud-service/Dockerfile
+!fraud-service/src/
+!fraud-service/src/**

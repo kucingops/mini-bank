@@ -18,7 +18,7 @@
     <description>minibank Bank - Fraud Detection &amp; Audit Service</description>
 
     <properties>
-        <java.version>17</java.version>
+        <java.version>25</java.version>
     </properties>
 
     <dependencies>

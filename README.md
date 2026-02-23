@@ -36,7 +36,8 @@ A distributed fund transfer system with real-time fraud detection using a micros
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Java 17+
+- Java 25+
+- Spring Boot 3.2.2
 - Maven 3.8+
 - Docker / Podman
 

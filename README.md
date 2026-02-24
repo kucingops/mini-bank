@@ -15,6 +15,11 @@ Sistem transfer dana terdistribusi dengan deteksi fraud secara real-time menggun
 
 ## 🚀 Cara Menjalankan Aplikasi
 
+### Catatan
+
+> [!NOTE]
+> File konfigurasi `application.yml` di setiap service **sengaja disertakan** dalam repositori ini untuk memudahkan proses pengetesan lokal. File-file ini tidak mengandung kredensial sensitif yang bersifat rahasia; semua konfigurasi (seperti JWT Secret) menggunakan nilai default atau variabel lingkungan yang ditujukan hanya untuk keperluan pengembangan dan pengujian di lingkungan lokal.
+
 ### Prasyarat
 
 | Tool | Versi |

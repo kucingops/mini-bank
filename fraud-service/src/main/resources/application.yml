@@ -29,6 +29,9 @@ fraud:
     suspicious-hours-start: 0
     suspicious-hours-end: 5
 
+jwt:
+  secret: ${JWT_SECRET:minibank-jwt-secret-key-change-in-production-2026}
+
 logging:
   level:
     com.minibank: DEBUG

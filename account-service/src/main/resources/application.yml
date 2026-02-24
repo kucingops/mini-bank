@@ -13,7 +13,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: update
     show-sql: true
     properties:
       hibernate:
@@ -30,6 +30,11 @@ spring:
       config: |
         singleServerConfig:
           address: "redis://${spring.data.redis.host}:${spring.data.redis.port}"
+
+jwt:
+  secret: ${JWT_SECRET:minibank-jwt-secret-key-change-in-production-2026}
+  access-token-expiration: 86400000
+  refresh-token-expiration: 604800000
 
 logging:
   level:

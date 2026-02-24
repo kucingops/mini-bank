@@ -10,6 +10,7 @@ import java.util.UUID;
 /**
  * Mapped entity for accounts table — read-only from Transaction Service perspective.
  * Account mutations (debit/credit) are done via native queries.
+ * Must match account-service's Account entity schema to avoid ddl-auto conflicts.
  */
 @Entity
 @Table(name = "accounts")
@@ -27,6 +28,9 @@ public class Account {
     @Column(name = "holder_name")
     private String holderName;
 
+    @Column(length = 100)
+    private String email;
+
     @Column(precision = 19, scale = 2)
     private BigDecimal balance;
 
@@ -37,4 +41,7 @@ public class Account {
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
 }

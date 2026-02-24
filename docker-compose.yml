@@ -13,7 +13,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U minibank -d minibank_bank"]
       interval: 5s
@@ -60,8 +59,9 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/minibank_bank
       SPRING_DATASOURCE_USERNAME: minibank
       SPRING_DATASOURCE_PASSWORD: minibank123
-      SPRING_REDIS_HOST: redis
-      SPRING_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-minibank-jwt-secret-key-change-in-production-2026}
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,8 +77,9 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/minibank_bank
       SPRING_DATASOURCE_USERNAME: minibank
       SPRING_DATASOURCE_PASSWORD: minibank123
-      SPRING_REDIS_HOST: redis
-      SPRING_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-minibank-jwt-secret-key-change-in-production-2026}
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,9 +92,10 @@ services:
     ports:
       - "8083:8083"
     environment:
-      SPRING_REDIS_HOST: redis
-      SPRING_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
+      JWT_SECRET: ${JWT_SECRET:-minibank-jwt-secret-key-change-in-production-2026}
     depends_on:
       redis:
         condition: service_healthy

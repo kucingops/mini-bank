@@ -26,14 +26,14 @@ Sistem transfer dana terdistribusi dengan deteksi fraud secara real-time menggun
 |---|---|
 | Java | 25+ |
 | Maven | 3.8+ |
-| Docker / Podman | Terbaru |
+| Docker | Terbaru |
 
 ### Langkah 1 — Jalankan Semua (Build + Start)
 
 Cukup satu perintah untuk build semua service dan menjalankan seluruh infrastruktur:
 
 ```bash
-podman compose up --build
+docker compose up --build
 ```
 
 > Ini akan otomatis:
@@ -45,7 +45,7 @@ podman compose up --build
 ### Langkah 2 — Pastikan Semua Service Berjalan
 
 ```bash
-podman ps
+docker ps
 ```
 
 Semua container harus berstatus **Up**:
@@ -84,10 +84,10 @@ Setiap service punya dokumentasi API interaktif (ada tombol **Authorize** untuk 
 
 ```bash
 # Stop semua container
-podman compose down
+docker compose down
 
 # Stop + hapus data (reset database, redis, elasticsearch)
-podman compose down -v
+docker compose down -v
 ```
 
 ---

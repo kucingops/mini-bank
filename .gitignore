@@ -34,3 +34,5 @@
 !fraud-service/Dockerfile
 !fraud-service/src/
 !fraud-service/src/**
+!flake.nix
+!flake.lock

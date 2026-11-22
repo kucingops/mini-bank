@@ -14,6 +14,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StreamOperations;
@@ -103,7 +104,7 @@ class TransferServiceTest {
     void cannotReadOtherPeoplesHistory() {
         loginAs(mallory, "USER");
 
-        assertThatThrownBy(() -> service.getTransactionHistory(alice))
+        assertThatThrownBy(() -> service.getTransactionHistory(alice, Pageable.unpaged()))
                 .isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(transactionRepository);
     }

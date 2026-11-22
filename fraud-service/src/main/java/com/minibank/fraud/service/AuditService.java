@@ -1,16 +1,20 @@
 package com.minibank.fraud.service;
 
 import com.minibank.fraud.document.AuditLog;
+import com.minibank.fraud.dto.AuditLogResponse;
+import com.minibank.fraud.dto.PageResponse;
 import com.minibank.fraud.repository.AuditLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
 
 /**
  * Audit Service — indexes and searches audit trail in Elasticsearch.
@@ -45,45 +49,42 @@ public class AuditService {
     /**
      * Full-text search across audit logs.
      * Enables "Pencarian Mutasi Tingkat Lanjut" — search by description, reference, etc.
+     * Results are ordered by relevance unless a sort is requested.
      */
-    public List<AuditLog> search(String keyword) {
+    public PageResponse<AuditLogResponse> search(String keyword, Pageable pageable) {
         log.info("Searching audit logs for: {}", keyword);
-        return auditLogRepository.searchByKeyword(keyword);
+        return toPage(auditLogRepository.searchByKeyword(keyword, pageable));
     }
 
     /**
-     * Get audit trail for a specific account.
-     * Uses Java Stream for processing results.
+     * Get audit trail for a specific account (as sender or recipient).
      */
-    public List<AuditLog> getAccountAuditTrail(String accountId) {
-        List<AuditLog> logs = auditLogRepository
-                .findByFromAccountIdOrToAccountIdOrderByTimestampDesc(accountId, accountId);
-
-        // Java Stream: filter and transform audit trail
-        return logs.stream()
-                .filter(log -> log.getTimestamp() != null)
-                .sorted((a, b) -> b.getTimestamp().compareTo(a.getTimestamp()))
-                .collect(Collectors.toList());
+    public PageResponse<AuditLogResponse> getAccountAuditTrail(UUID accountId, Pageable pageable) {
+        String id = accountId.toString();
+        return toPage(auditLogRepository.findByFromAccountIdOrToAccountId(id, id, pageable));
     }
 
     /**
-     * Get all flagged (suspicious) transactions.
+     * Get flagged (suspicious) transactions.
      */
-    public List<AuditLog> getFlaggedTransactions() {
-        return auditLogRepository.findByFraudCheckResultOrderByTimestampDesc("FLAGGED");
+    public PageResponse<AuditLogResponse> getFlaggedTransactions(Pageable pageable) {
+        return toPage(auditLogRepository.findByFraudCheckResult("FLAGGED", pageable));
     }
 
     /**
      * Get all audit logs.
-     * Demonstrates Java Stream with Iterable conversion.
      */
-    public List<AuditLog> getAllLogs() {
-        return StreamSupport.stream(auditLogRepository.findAll().spliterator(), false)
-                .sorted((a, b) -> {
-                    if (a.getTimestamp() == null) return 1;
-                    if (b.getTimestamp() == null) return -1;
-                    return b.getTimestamp().compareTo(a.getTimestamp());
-                })
+    public PageResponse<AuditLogResponse> getAllLogs(Pageable pageable) {
+        return toPage(auditLogRepository.findAll(pageable));
+    }
+
+    /**
+     * Java Stream: map Elasticsearch documents to API DTOs.
+     */
+    private PageResponse<AuditLogResponse> toPage(Page<AuditLog> page) {
+        List<AuditLogResponse> content = page.getContent().stream()
+                .map(AuditLogResponse::from)
                 .collect(Collectors.toList());
+        return PageResponse.of(new PageImpl<>(content, page.getPageable(), page.getTotalElements()));
     }
 }

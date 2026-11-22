@@ -1,6 +1,8 @@
 package com.minibank.transaction.repository;
 
 import com.minibank.transaction.entity.Transaction;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -15,7 +17,13 @@ import java.util.UUID;
 @Repository
 public interface TransactionRepository extends JpaRepository<Transaction, UUID> {
 
-    List<Transaction> findByFromAccountIdOrToAccountIdOrderByCreatedAtDesc(UUID fromId, UUID toId);
+    /**
+     * Paginated history of an account (sent and received), excluding cancelled transfers.
+     */
+    @Query("SELECT t FROM Transaction t " +
+            "WHERE (t.fromAccountId = :accountId OR t.toAccountId = :accountId) " +
+            "AND t.status <> 'CANCELLED'")
+    Page<Transaction> findHistory(@Param("accountId") UUID accountId, Pageable pageable);
 
     /**
      * Sum of transfers from an account today that count against the daily limit.
@@ -74,7 +82,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
                 LEAD(t.amount) OVER (PARTITION BY a.id ORDER BY t.created_at) as next_amount
             FROM transactions t
             JOIN accounts a ON (t.from_account_id = a.id OR t.to_account_id = a.id)
-            WHERE DATE(t.created_at) = :date
+            WHERE DATE(t.created_at) = CAST(:date AS date)
             ORDER BY a.id, t.created_at
             """, nativeQuery = true)
     List<Object[]> findDailyReconciliation(@Param("date") String date);
@@ -100,7 +108,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
                     MAX(t.created_at) as last_txn_time
                 FROM accounts a
                 LEFT JOIN transactions t ON (t.from_account_id = a.id OR t.to_account_id = a.id)
-                    AND DATE(t.created_at) = :date
+                    AND DATE(t.created_at) = CAST(:date AS date)
                 WHERE a.status = 'ACTIVE'
                 GROUP BY a.id, a.account_number, a.holder_name, a.balance
             )

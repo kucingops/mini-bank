@@ -10,7 +10,9 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "transactions")
+@Table(name = "transactions", uniqueConstraints = @UniqueConstraint(
+        name = "uk_transactions_sender_idempotency_key",
+        columnNames = {"from_account_id", "idempotency_key"}))
 @Getter
 @Setter
 @NoArgsConstructor
@@ -48,6 +50,18 @@ public class Transaction {
     @Column(name = "fraud_check_status", length = 20)
     @Builder.Default
     private String fraudCheckStatus = "PENDING";
+
+    /**
+     * Client-supplied Idempotency-Key, unique per sender account. Null when the client sent none.
+     */
+    @Column(name = "idempotency_key", length = 64)
+    private String idempotencyKey;
+
+    /**
+     * SHA-256 of the request that created this transfer, to detect a key reused for a different request.
+     */
+    @Column(name = "request_hash", length = 64)
+    private String requestHash;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

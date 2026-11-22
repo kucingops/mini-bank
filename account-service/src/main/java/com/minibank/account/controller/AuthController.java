@@ -3,6 +3,8 @@ package com.minibank.account.controller;
 import com.minibank.account.dto.*;
 import com.minibank.account.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -12,7 +14,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
 @Tag(name = "Authentication", description = "User registration, login, token refresh, and logout")
 public class AuthController {
@@ -20,7 +22,9 @@ public class AuthController {
     private final AuthService authService;
 
     @Operation(summary = "Register a new user",
-            description = "Creates a new bank account and user credentials. Returns JWT access and refresh tokens")
+            description = "Creates a new bank account (balance 0, default daily limit Rp 50.000.000) and user credentials. Returns JWT access and refresh tokens")
+    @ApiResponse(responseCode = "201", description = "Registered; tokens returned")
+    @SecurityRequirements // public: no token needed
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
         AuthResponse response = authService.register(request);
@@ -29,6 +33,7 @@ public class AuthController {
 
     @Operation(summary = "Login",
             description = "Authenticates with email and password. Returns JWT access token (24h) and refresh token (7 days)")
+    @SecurityRequirements // public: no token needed
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
         AuthResponse response = authService.login(request);
@@ -37,6 +42,7 @@ public class AuthController {
 
     @Operation(summary = "Refresh access token",
             description = "Exchange a valid refresh token for a new access token and refresh token pair")
+    @SecurityRequirements // public: no token needed
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refreshToken(@Valid @RequestBody RefreshTokenRequest request) {
         AuthResponse response = authService.refreshToken(request);
@@ -45,6 +51,7 @@ public class AuthController {
 
     @Operation(summary = "Logout",
             description = "Revokes all refresh tokens for the authenticated user")
+    @ApiResponse(responseCode = "204", description = "Logged out; refresh tokens revoked")
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(Authentication authentication) {
         authService.logout(authentication.getName());

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Maven Central sometimes answers 429 when the matrix jobs download at the same time; retry with backoff
+  MAVEN_ARGS: >-
+    -Daether.connector.http.retryHandler.count=5
+    -Daether.connector.http.retryHandler.interval=10000
+    -Daether.connector.http.retryHandler.serviceUnavailable=429,503
+
+jobs:
+  test:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [account-service, transaction-service, fraud-service]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Build and test
+        working-directory: ${{ matrix.service }}
+        run: mvn -B verify
+
+  openapi:
+    name: OpenAPI spec is up to date
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the stack
+        run: docker compose up -d --build
+      - name: Export specs
+        run: ./scripts/export-openapi.sh
+      - name: Check for undocumented API changes
+        run: |
+          if ! git diff --exit-code -- docs/openapi; then
+            echo "::error::The API changed but docs/openapi is out of date. Run 'docker compose up -d --build && ./scripts/export-openapi.sh' and commit the result."
+            exit 1
+          fi
+          untracked=$(git ls-files --others --exclude-standard -- docs/openapi)
+          if [ -n "$untracked" ]; then
+            echo "::error::New spec files are not committed: $untracked"
+            exit 1
+          fi
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v

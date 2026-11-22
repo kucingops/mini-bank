@@ -10,6 +10,14 @@
 !README.md
 !docker-compose.yml
 
+# --------------- Docs, scripts, CI --------
+!docs/
+!docs/**
+!scripts/
+!scripts/**
+!.github/
+!.github/**
+
 # --------------- Init DB -------------------
 !init-db/
 !init-db/**

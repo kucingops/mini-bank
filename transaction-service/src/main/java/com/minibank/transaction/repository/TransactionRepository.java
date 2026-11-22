@@ -1,6 +1,8 @@
 package com.minibank.transaction.repository;
 
 import com.minibank.transaction.entity.Transaction;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -10,22 +12,44 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
 public interface TransactionRepository extends JpaRepository<Transaction, UUID> {
 
-    List<Transaction> findByFromAccountIdOrToAccountIdOrderByCreatedAtDesc(UUID fromId, UUID toId);
+    /**
+     * Transfer previously created by this sender with the given Idempotency-Key.
+     */
+    Optional<Transaction> findByFromAccountIdAndIdempotencyKey(UUID fromAccountId, String idempotencyKey);
 
     /**
-     * Sum of completed transfers from an account today — for daily limit check.
+     * Paginated history of an account (sent and received), excluding cancelled transfers.
+     */
+    @Query("SELECT t FROM Transaction t " +
+            "WHERE (t.fromAccountId = :accountId OR t.toAccountId = :accountId) " +
+            "AND t.status <> 'CANCELLED'")
+    Page<Transaction> findHistory(@Param("accountId") UUID accountId, Pageable pageable);
+
+    /**
+     * Sum of transfers from an account today that count against the daily limit.
+     * PENDING transfers are included so that several in-flight requests cannot
+     * jointly exceed the limit before the fraud check completes them.
      */
     @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
             "WHERE t.fromAccountId = :accountId " +
-            "AND t.status = 'COMPLETED' " +
+            "AND t.status IN ('PENDING', 'COMPLETED') " +
             "AND t.createdAt >= :startOfDay")
     BigDecimal sumDailyTransfers(@Param("accountId") UUID accountId,
                                  @Param("startOfDay") LocalDateTime startOfDay);
+
+    /**
+     * Total amount of outgoing transfers that are still PENDING — reserved funds
+     * that are not yet debited from the balance.
+     */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
+            "WHERE t.fromAccountId = :accountId AND t.status = 'PENDING'")
+    BigDecimal sumPendingOutgoing(@Param("accountId") UUID accountId);
 
     /**
      * Count transactions in the last hour — for fraud rate limiting.
@@ -64,7 +88,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
                 LEAD(t.amount) OVER (PARTITION BY a.id ORDER BY t.created_at) as next_amount
             FROM transactions t
             JOIN accounts a ON (t.from_account_id = a.id OR t.to_account_id = a.id)
-            WHERE DATE(t.created_at) = :date
+            WHERE DATE(t.created_at) = CAST(:date AS date)
             ORDER BY a.id, t.created_at
             """, nativeQuery = true)
     List<Object[]> findDailyReconciliation(@Param("date") String date);
@@ -90,7 +114,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
                     MAX(t.created_at) as last_txn_time
                 FROM accounts a
                 LEFT JOIN transactions t ON (t.from_account_id = a.id OR t.to_account_id = a.id)
-                    AND DATE(t.created_at) = :date
+                    AND DATE(t.created_at) = CAST(:date AS date)
                 WHERE a.status = 'ACTIVE'
                 GROUP BY a.id, a.account_number, a.holder_name, a.balance
             )
@@ -120,4 +144,17 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     void updateStatus(@Param("id") UUID id,
                       @Param("status") String status,
                       @Param("fraudStatus") String fraudStatus);
+
+    /**
+     * Compare-and-set status transition. Only updates the row if it is still in
+     * {@code expectedStatus}; returns the number of rows changed (0 = already handled).
+     * Used to make stream event handling idempotent.
+     */
+    @Modifying
+    @Query("UPDATE Transaction t SET t.status = :status, t.fraudCheckStatus = :fraudStatus, t.updatedAt = CURRENT_TIMESTAMP " +
+            "WHERE t.id = :id AND t.status = :expectedStatus")
+    int transitionStatus(@Param("id") UUID id,
+                         @Param("expectedStatus") String expectedStatus,
+                         @Param("status") String status,
+                         @Param("fraudStatus") String fraudStatus);
 }

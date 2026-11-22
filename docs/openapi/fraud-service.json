@@ -1,0 +1,633 @@
+{
+  "components": {
+    "schemas": {
+      "AuditLogResponse": {
+        "description": "Fraud check audit entry for one transfer",
+        "properties": {
+          "amount": {
+            "description": "Amount in IDR",
+            "example": 75000000,
+            "type": "number"
+          },
+          "description": {
+            "description": "Transfer free-text note",
+            "example": "Transfer besar",
+            "type": "string"
+          },
+          "details": {
+            "description": "Which fraud rules fired",
+            "example": "LARGE_AMOUNT: Transfer Rp 75000000 exceeds threshold Rp 50000000. SUSPICIOUS_HOUR: Transfer at 2:00. ",
+            "type": "string"
+          },
+          "eventType": {
+            "description": "Event type",
+            "example": "TRANSFER_FRAUD_CHECK",
+            "type": "string"
+          },
+          "fraudCheckResult": {
+            "description": "Fraud check result",
+            "enum": [
+              "PASSED",
+              "FLAGGED"
+            ],
+            "example": "FLAGGED",
+            "type": "string"
+          },
+          "fromAccountId": {
+            "description": "Source account",
+            "example": "3f1c2a9e-8b7d-4c3a-9e2f-1a2b3c4d5e6f",
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "description": "Audit entry ID",
+            "example": "b5c1d2e3-f4a5-4b6c-8d7e-9f0a1b2c3d4e",
+            "type": "string"
+          },
+          "referenceNo": {
+            "description": "Transaction reference number",
+            "example": "TXN17953207695290297",
+            "type": "string"
+          },
+          "riskLevel": {
+            "description": "Risk level",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH"
+            ],
+            "example": "MEDIUM",
+            "type": "string"
+          },
+          "riskScore": {
+            "description": "Total risk score (>= 40 is blocked)",
+            "example": 50,
+            "format": "int32",
+            "type": "integer"
+          },
+          "status": {
+            "description": "Outcome sent back to the transaction service",
+            "enum": [
+              "VALIDATED",
+              "REJECTED"
+            ],
+            "example": "REJECTED",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "When the check ran",
+            "example": "2026-02-25T02:10:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "toAccountId": {
+            "description": "Destination account",
+            "example": "9b2e4f6a-1c3d-4e5f-8a7b-6c5d4e3f2a1b",
+            "format": "uuid",
+            "type": "string"
+          },
+          "transactionId": {
+            "description": "Transaction ID",
+            "example": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "description": "Standard error body",
+        "properties": {
+          "error": {
+            "description": "HTTP reason phrase",
+            "example": "Forbidden",
+            "type": "string"
+          },
+          "message": {
+            "description": "Human-readable explanation",
+            "example": "You do not have access to this account",
+            "type": "string"
+          },
+          "path": {
+            "description": "Request path",
+            "example": "/api/v1/accounts/3f1c2a9e-8b7d-4c3a-9e2f-1a2b3c4d5e6f",
+            "type": "string"
+          },
+          "status": {
+            "description": "HTTP status code",
+            "example": 403,
+            "format": "int32",
+            "type": "integer"
+          },
+          "timestamp": {
+            "description": "When the error happened (server time)",
+            "format": "date-time",
+            "type": "string"
+          }
+        }
+      },
+      "PageResponseAuditLogResponse": {
+        "description": "One page of results",
+        "properties": {
+          "content": {
+            "description": "Items on this page",
+            "items": {
+              "$ref": "#/components/schemas/AuditLogResponse"
+            },
+            "type": "array"
+          },
+          "page": {
+            "description": "Zero-based page index",
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "size": {
+            "description": "Requested page size",
+            "example": 20,
+            "format": "int32",
+            "type": "integer"
+          },
+          "totalElements": {
+            "description": "Total number of items across all pages",
+            "example": 42,
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalPages": {
+            "description": "Total number of pages",
+            "example": 3,
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "Bearer Authentication": {
+        "bearerFormat": "JWT",
+        "description": "Paste the accessToken from POST /api/v1/auth/login",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Fraud detection and audit trail service (Elasticsearch-backed). All endpoints are ADMIN only.",
+    "title": "MiniBank — Fraud & Audit Service API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/audit": {
+      "get": {
+        "description": "All audit entries. Default sort: newest first",
+        "operationId": "getAll",
+        "parameters": [
+          {
+            "description": "Zero-based page index (0..N)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The size of the page to be returned",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": [
+                "timestamp,DESC"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageResponseAuditLogResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request: validation failed or a parameter is malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated, but not allowed to access this resource"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error"
+          }
+        },
+        "summary": "Get all audit logs",
+        "tags": [
+          "Audit & Fraud"
+        ]
+      }
+    },
+    "/api/v1/audit/account/{accountId}/trail": {
+      "get": {
+        "description": "Audit entries where the account is sender or recipient. Default sort: newest first",
+        "operationId": "getAccountTrail",
+        "parameters": [
+          {
+            "description": "Account ID",
+            "example": "3f1c2a9e-8b7d-4c3a-9e2f-1a2b3c4d5e6f",
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based page index (0..N)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The size of the page to be returned",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": [
+                "timestamp,DESC"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageResponseAuditLogResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request: validation failed or a parameter is malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated, but not allowed to access this resource"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error"
+          }
+        },
+        "summary": "Get account audit trail",
+        "tags": [
+          "Audit & Fraud"
+        ]
+      }
+    },
+    "/api/v1/audit/flagged": {
+      "get": {
+        "description": "Transfers flagged as suspicious by the fraud engine (risk score >= 40). Default sort: newest first",
+        "operationId": "getFlagged",
+        "parameters": [
+          {
+            "description": "Zero-based page index (0..N)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The size of the page to be returned",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": [
+                "timestamp,DESC"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageResponseAuditLogResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request: validation failed or a parameter is malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated, but not allowed to access this resource"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error"
+          }
+        },
+        "summary": "Get flagged transactions",
+        "tags": [
+          "Audit & Fraud"
+        ]
+      }
+    },
+    "/api/v1/audit/search": {
+      "get": {
+        "description": "Searches description, details, reference number and transaction ID using Elasticsearch multi_match with fuzzy matching. Ordered by relevance unless `sort` is given",
+        "operationId": "search",
+        "parameters": [
+          {
+            "description": "Search text (typos tolerated)",
+            "example": "makan siang",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based page index (0..N)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The size of the page to be returned",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageResponseAuditLogResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request: validation failed or a parameter is malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated, but not allowed to access this resource"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error"
+          }
+        },
+        "summary": "Full-text search audit logs",
+        "tags": [
+          "Audit & Fraud"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "Bearer Authentication": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Generated server url",
+      "url": "http://localhost:8083"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Audit trail and fraud detection — search logs, view flagged transactions, and account trails (Elasticsearch-backed). ADMIN only",
+      "name": "Audit & Fraud"
+    }
+  ]
+}

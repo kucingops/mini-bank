@@ -2,10 +2,14 @@ package com.minibank.account.service;
 
 import com.minibank.account.dto.AccountResponse;
 import com.minibank.account.dto.CreateAccountRequest;
+import com.minibank.account.dto.PageResponse;
 import com.minibank.account.entity.Account;
 import com.minibank.account.repository.AccountRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -91,11 +95,13 @@ public class AccountService {
      * Get all accounts.
      * Demonstrates Java Stream — mapping entity list to DTO list.
      */
-    public List<AccountResponse> getAllAccounts() {
-        return accountRepository.findAll()
-                .stream()
+    public PageResponse<AccountResponse> getAllAccounts(Pageable pageable) {
+        Page<Account> page = accountRepository.findAll(pageable);
+        // Java Stream: map the page's entities to DTOs
+        List<AccountResponse> content = page.getContent().stream()
                 .map(this::toResponse)
                 .collect(Collectors.toList());
+        return PageResponse.of(new PageImpl<>(content, pageable, page.getTotalElements()));
     }
 
     /**

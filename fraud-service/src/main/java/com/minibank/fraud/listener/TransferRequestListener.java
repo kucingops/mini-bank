@@ -3,6 +3,7 @@ package com.minibank.fraud.listener;
 import com.minibank.fraud.document.AuditLog;
 import com.minibank.fraud.service.AuditService;
 import com.minibank.fraud.service.FraudDetectionService;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,7 +15,6 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -45,7 +45,13 @@ public class TransferRequestListener {
     @Value("${redis.stream.consumer-group}")
     private String consumerGroup;
 
-    private static final String CONSUMER_NAME = "fraud-service-consumer";
+    private ReliableStreamConsumer consumer;
+
+    @PostConstruct
+    void init() {
+        consumer = new ReliableStreamConsumer(redisTemplate, consumerGroup,
+                "fraud-service", Duration.ofSeconds(30), 5);
+    }
 
     /**
      * Poll for transfer-requested events every 500ms.
@@ -53,23 +59,16 @@ public class TransferRequestListener {
      */
     @Scheduled(fixedDelay = 500)
     public void consumeTransferRequests() {
-        try {
-            List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream().read(
-                    Consumer.from(consumerGroup, CONSUMER_NAME),
-                    StreamReadOptions.empty().count(10).block(Duration.ofMillis(100)),
-                    StreamOffset.create(transferRequestedStream, ReadOffset.lastConsumed())
-            );
+        consumer.poll(transferRequestedStream, this::processTransferRequest);
+    }
 
-            if (records != null && !records.isEmpty()) {
-                for (MapRecord<String, Object, Object> record : records) {
-                    processTransferRequest(record);
-                    // Acknowledge the message
-                    redisTemplate.opsForStream().acknowledge(consumerGroup, record);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Polling transfer-requested: {}", e.getMessage());
-        }
+    /**
+     * Retry requests whose processing failed (e.g. Elasticsearch down) or whose
+     * consumer died before acknowledging.
+     */
+    @Scheduled(fixedDelay = 10_000)
+    public void reclaimPending() {
+        consumer.reclaim(transferRequestedStream, this::processTransferRequest);
     }
 
     private void processTransferRequest(MapRecord<String, Object, Object> record) {

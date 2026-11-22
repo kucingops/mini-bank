@@ -1,6 +1,8 @@
 package com.minibank.fraud.repository;
 
 import com.minibank.fraud.document.AuditLog;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.elasticsearch.annotations.Query;
 import org.springframework.data.elasticsearch.repository.ElasticsearchRepository;
 import org.springframework.stereotype.Repository;
@@ -22,7 +24,7 @@ public interface AuditLogRepository extends ElasticsearchRepository<AuditLog, St
     /**
      * Find audit logs by account (source or destination).
      */
-    List<AuditLog> findByFromAccountIdOrToAccountIdOrderByTimestampDesc(String fromId, String toId);
+    Page<AuditLog> findByFromAccountIdOrToAccountId(String fromId, String toId, Pageable pageable);
 
     /**
      * Full-text search across description and details fields.
@@ -38,12 +40,12 @@ public interface AuditLogRepository extends ElasticsearchRepository<AuditLog, St
               }
             }
             """)
-    List<AuditLog> searchByKeyword(String keyword);
+    Page<AuditLog> searchByKeyword(String keyword, Pageable pageable);
 
     /**
      * Find flagged/suspicious transactions.
      */
-    List<AuditLog> findByFraudCheckResultOrderByTimestampDesc(String fraudCheckResult);
+    Page<AuditLog> findByFraudCheckResult(String fraudCheckResult, Pageable pageable);
 
     /**
      * Find by risk level.

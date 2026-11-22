@@ -1,16 +1,16 @@
 package com.minibank.transaction.listener;
 
 import com.minibank.transaction.service.TransferService;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.connection.stream.*;
+import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -19,7 +19,8 @@ import java.util.UUID;
  * Consumes events from transfer-validated and transfer-rejected streams.
  * 
  * This replaces Kafka Consumer — same consumer group pattern.
- * Uses polling-based approach with @Scheduled for simplicity.
+ * Uses polling-based approach with @Scheduled for simplicity; delivery is
+ * at-least-once via {@link ReliableStreamConsumer}.
  */
 @Component
 @RequiredArgsConstructor
@@ -38,54 +39,36 @@ public class TransferResultListener {
     @Value("${redis.stream.consumer-group}")
     private String consumerGroup;
 
-    private static final String CONSUMER_NAME = "transaction-service-consumer";
+    private ReliableStreamConsumer consumer;
+
+    @PostConstruct
+    void init() {
+        consumer = new ReliableStreamConsumer(redisTemplate, consumerGroup,
+                "transaction-service", Duration.ofSeconds(30), 5);
+    }
 
     /**
-     * Poll for validated transfers every 500ms.
+     * Poll for new fraud-check results every 500ms.
      * Equivalent to Kafka consumer polling loop.
      */
     @Scheduled(fixedDelay = 500)
     public void consumeValidatedTransfers() {
-        try {
-            List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream().read(
-                    Consumer.from(consumerGroup, CONSUMER_NAME),
-                    StreamReadOptions.empty().count(10).block(Duration.ofMillis(100)),
-                    StreamOffset.create(transferValidatedStream, ReadOffset.lastConsumed())
-            );
+        consumer.poll(transferValidatedStream, this::processValidatedTransfer);
+    }
 
-            if (records != null && !records.isEmpty()) {
-                for (MapRecord<String, Object, Object> record : records) {
-                    processValidatedTransfer(record);
-                    // Acknowledge message (like Kafka commit offset)
-                    redisTemplate.opsForStream().acknowledge(consumerGroup, record);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Polling transfer-validated: {}", e.getMessage());
-        }
+    @Scheduled(fixedDelay = 500)
+    public void consumeRejectedTransfers() {
+        consumer.poll(transferRejectedStream, this::processRejectedTransfer);
     }
 
     /**
-     * Poll for rejected transfers every 500ms.
+     * Retry results whose processing failed or whose consumer died before acknowledging.
+     * Safe because completeTransfer/rejectTransfer are idempotent.
      */
-    @Scheduled(fixedDelay = 500)
-    public void consumeRejectedTransfers() {
-        try {
-            List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream().read(
-                    Consumer.from(consumerGroup, CONSUMER_NAME),
-                    StreamReadOptions.empty().count(10).block(Duration.ofMillis(100)),
-                    StreamOffset.create(transferRejectedStream, ReadOffset.lastConsumed())
-            );
-
-            if (records != null && !records.isEmpty()) {
-                for (MapRecord<String, Object, Object> record : records) {
-                    processRejectedTransfer(record);
-                    redisTemplate.opsForStream().acknowledge(consumerGroup, record);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Polling transfer-rejected: {}", e.getMessage());
-        }
+    @Scheduled(fixedDelay = 10_000)
+    public void reclaimPending() {
+        consumer.reclaim(transferValidatedStream, this::processValidatedTransfer);
+        consumer.reclaim(transferRejectedStream, this::processRejectedTransfer);
     }
 
     private void processValidatedTransfer(MapRecord<String, Object, Object> record) {

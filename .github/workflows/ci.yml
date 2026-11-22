@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  # Maven Central sometimes answers 429 when the matrix jobs download at the same time; retry with backoff
+  MAVEN_ARGS: >-
+    -Daether.connector.http.retryHandler.count=5
+    -Daether.connector.http.retryHandler.interval=10000
+    -Daether.connector.http.retryHandler.serviceUnavailable=429,503
+
 jobs:
   test:
     name: Test ${{ matrix.service }}

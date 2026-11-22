@@ -325,6 +325,18 @@
       "post": {
         "description": "Submits a transfer from the caller's own account. Returns 202 Accepted with status PENDING — the fraud check and the debit/credit happen asynchronously via Redis Streams; poll GET /api/v1/transfers/{id} for the result",
         "operationId": "initiateTransfer",
+        "parameters": [
+          {
+            "description": "Optional but recommended. A unique value per transfer (e.g. a UUID, max 64 chars), scoped to the sender account. Retrying with the same key and the same body returns the original transfer (with `Idempotent-Replayed: true`) instead of creating a new one; reusing it with a different body returns 409.",
+            "example": "8e3f5c2a-6b1d-4f7e-9a0c-2d4b6e8f1a3c",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -344,7 +356,16 @@
                 }
               }
             },
-            "description": "Accepted; status is PENDING until the fraud check completes"
+            "description": "Accepted; status is PENDING until the fraud check completes. On an idempotent replay the original transfer is returned with header Idempotent-Replayed: true",
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present (true) when the response is a replay",
+                "schema": {
+                  "example": true
+                },
+                "style": "simple"
+              }
+            }
           },
           "400": {
             "content": {
@@ -375,6 +396,16 @@
               }
             },
             "description": "Authenticated, but not allowed to access this resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency-Key was already used for a different transfer request"
           },
           "500": {
             "content": {

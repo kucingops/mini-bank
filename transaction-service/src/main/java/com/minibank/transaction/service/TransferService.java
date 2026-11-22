@@ -5,6 +5,7 @@ import com.minibank.transaction.dto.TransferRequest;
 import com.minibank.transaction.dto.TransferResponse;
 import com.minibank.transaction.entity.Account;
 import com.minibank.transaction.entity.Transaction;
+import com.minibank.transaction.exception.IdempotencyConflictException;
 import com.minibank.transaction.repository.AccountRepository;
 import com.minibank.transaction.repository.TransactionRepository;
 import com.minibank.transaction.security.SecurityUtils;
@@ -24,6 +25,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -67,8 +71,9 @@ public class TransferService {
      * 4. Publish TransferRequested event to Redis Stream
      * 5. Return 202 Accepted
      */
-    public TransferResponse initiateTransfer(TransferRequest request) {
+    public TransferResult initiateTransfer(TransferRequest request, String idempotencyKey) {
         validateSameAccount(request);
+        validateIdempotencyKey(idempotencyKey);
 
         // Only the owner of the source account may move money out of it
         if (!SecurityUtils.isOwner(request.getFromAccountId())) {
@@ -86,6 +91,25 @@ public class TransferService {
             }
 
             log.info("Distributed lock acquired for source account {}", request.getFromAccountId());
+
+            // Idempotency: a retry with the same key returns the original transfer instead of
+            // creating a second one. Checked under the source-account lock, so concurrent
+            // retries are serialized; the unique constraint on (from_account_id, idempotency_key)
+            // is the backstop.
+            String requestHash = idempotencyKey != null ? fingerprint(request) : null;
+            if (idempotencyKey != null) {
+                Optional<Transaction> existing = transactionRepository
+                        .findByFromAccountIdAndIdempotencyKey(request.getFromAccountId(), idempotencyKey);
+                if (existing.isPresent()) {
+                    if (!requestHash.equals(existing.get().getRequestHash())) {
+                        throw new IdempotencyConflictException(
+                                "Idempotency-Key '" + idempotencyKey + "' was already used for a different transfer request");
+                    }
+                    log.info("Idempotent replay of transfer {} for key {}",
+                            existing.get().getReferenceNo(), idempotencyKey);
+                    return new TransferResult(toResponse(existing.get()), true);
+                }
+            }
 
             // Validate accounts exist and are active
             Account fromAccount = accountRepository.findById(request.getFromAccountId())
@@ -118,6 +142,8 @@ public class TransferService {
                     .status("PENDING")
                     .fraudCheckStatus("PENDING")
                     .description(request.getDescription())
+                    .idempotencyKey(idempotencyKey)
+                    .requestHash(requestHash)
                     .build();
 
             transaction = transactionRepository.save(transaction);
@@ -126,7 +152,7 @@ public class TransferService {
             // Publish to Redis Stream (replaces Kafka producer)
             publishTransferRequested(transaction);
 
-            return toResponse(transaction);
+            return new TransferResult(toResponse(transaction), false);
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -265,6 +291,37 @@ public class TransferService {
     }
 
     // ==================== Helpers ====================
+
+    private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 64;
+
+    private void validateIdempotencyKey(String key) {
+        if (key == null) {
+            return;
+        }
+        if (key.isBlank() || key.length() > MAX_IDEMPOTENCY_KEY_LENGTH) {
+            throw new IllegalArgumentException(
+                    "Idempotency-Key must be 1-" + MAX_IDEMPOTENCY_KEY_LENGTH + " characters");
+        }
+    }
+
+    /**
+     * SHA-256 over the fields that define a transfer. Amount is normalized so that
+     * 1000000 and 1000000.00 count as the same request.
+     */
+    static String fingerprint(TransferRequest request) {
+        String canonical = String.join("|",
+                String.valueOf(request.getFromAccountId()),
+                String.valueOf(request.getToAccountId()),
+                request.getAmount().stripTrailingZeros().toPlainString(),
+                request.getDescription() != null ? request.getDescription() : "");
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+    }
 
     private void validateSameAccount(TransferRequest request) {
         if (request.getFromAccountId().equals(request.getToAccountId())) {

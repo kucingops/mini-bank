@@ -1,12 +1,18 @@
 package com.minibank.transaction.controller;
 
+import com.minibank.transaction.dto.ErrorResponse;
 import com.minibank.transaction.dto.PageResponse;
 import com.minibank.transaction.dto.TransferRequest;
 import com.minibank.transaction.dto.TransferResponse;
+import com.minibank.transaction.service.TransferResult;
 import com.minibank.transaction.service.TransferService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
+import io.swagger.v3.oas.annotations.headers.Header;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +32,9 @@ import java.util.UUID;
 @Tag(name = "Transfer", description = "Fund transfer operations — initiate, track, and view transaction history")
 public class TransferController {
 
+    static final String IDEMPOTENCY_KEY = "Idempotency-Key";
+    static final String IDEMPOTENT_REPLAYED = "Idempotent-Replayed";
+
     private final TransferService transferService;
 
     /**
@@ -33,11 +42,29 @@ public class TransferController {
      * Returns 202 Accepted — processing happens asynchronously via Redis Streams.
      */
     @Operation(summary = "Initiate a fund transfer", description = "Submits a transfer from the caller's own account. Returns 202 Accepted with status PENDING — the fraud check and the debit/credit happen asynchronously via Redis Streams; poll GET /api/v1/transfers/{id} for the result")
-    @ApiResponse(responseCode = "202", description = "Accepted; status is PENDING until the fraud check completes")
+    @ApiResponse(responseCode = "202", description = "Accepted; status is PENDING until the fraud check completes. "
+            + "On an idempotent replay the original transfer is returned with header Idempotent-Replayed: true",
+            headers = @Header(name = "Idempotent-Replayed", description = "Present (true) when the response is a replay",
+                    schema = @Schema(type = "string", example = "true")))
     @PostMapping
-    public ResponseEntity<TransferResponse> initiateTransfer(@Valid @RequestBody TransferRequest request) {
-        TransferResponse response = transferService.initiateTransfer(request);
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
+    @ApiResponse(responseCode = "409",
+            description = "Idempotency-Key was already used for a different transfer request",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
+    public ResponseEntity<TransferResponse> initiateTransfer(
+            @Parameter(in = ParameterIn.HEADER, name = IDEMPOTENCY_KEY,
+                    description = "Optional but recommended. A unique value per transfer (e.g. a UUID, max 64 chars), "
+                            + "scoped to the sender account. Retrying with the same key and the same body returns the "
+                            + "original transfer (with `Idempotent-Replayed: true`) instead of creating a new one; "
+                            + "reusing it with a different body returns 409.",
+                    example = "8e3f5c2a-6b1d-4f7e-9a0c-2d4b6e8f1a3c")
+            @RequestHeader(value = IDEMPOTENCY_KEY, required = false) String idempotencyKey,
+            @Valid @RequestBody TransferRequest request) {
+        TransferResult result = transferService.initiateTransfer(request, idempotencyKey);
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.ACCEPTED);
+        if (result.replayed()) {
+            response.header(IDEMPOTENT_REPLAYED, "true");
+        }
+        return response.body(result.response());
     }
 
     @Operation(summary = "Get transfer status",

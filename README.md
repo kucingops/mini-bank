@@ -145,6 +145,7 @@ Transfer Rp 1.000.000 ke akun lain (login dulu sebagai Budi untuk mendapatkan `a
 curl -X POST http://localhost:8082/api/v1/transfers \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer {accessToken}" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{
     "fromAccountId": "{accountId_syarif}",
     "toAccountId": "{accountId_budi}",
@@ -163,6 +164,8 @@ curl -X POST http://localhost:8082/api/v1/transfers \
   "amount": 1000000
 }
 ```
+
+> 🔁 **Idempotency-Key** (opsional, sangat disarankan): nilai unik per transfer (misalnya UUID, maks. 64 karakter), berlaku per akun pengirim. Kalau request dikirim ulang (misalnya retry setelah timeout) dengan key **dan** body yang sama, server mengembalikan transfer yang pertama dengan header `Idempotent-Replayed: true`, sehingga saldo tidak terpotong dua kali. Kalau key yang sama dipakai untuk body yang berbeda, respons-nya **409 Conflict**.
 
 > Transfer berstatus **PENDING** karena diproses secara **asinkron**. Fraud Service akan mengecek transaksi ini via Redis Stream.
 

@@ -4,12 +4,14 @@ import com.minibank.transaction.dto.TransferRequest;
 import com.minibank.transaction.dto.TransferResponse;
 import com.minibank.transaction.entity.Account;
 import com.minibank.transaction.entity.Transaction;
+import com.minibank.transaction.exception.IdempotencyConflictException;
 import com.minibank.transaction.repository.AccountRepository;
 import com.minibank.transaction.repository.TransactionRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
@@ -66,7 +68,7 @@ class TransferServiceTest {
     void cannotTransferFromSomeoneElsesAccount() {
         loginAs(mallory, "USER");
 
-        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "100000")))
+        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "100000"), null))
                 .isInstanceOf(AccessDeniedException.class);
 
         verifyNoInteractions(redissonClient, transactionRepository, accountRepository);
@@ -76,7 +78,7 @@ class TransferServiceTest {
     void adminWithoutAccountCannotTransferOnBehalfOfUsers() {
         loginAs(null, "ADMIN");
 
-        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "100000")))
+        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "100000"), null))
                 .isInstanceOf(AccessDeniedException.class);
     }
 
@@ -119,7 +121,7 @@ class TransferServiceTest {
         // 900k already reserved by PENDING transfers -> only 100k available
         when(transactionRepository.sumPendingOutgoing(alice)).thenReturn(new BigDecimal("900000"));
 
-        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "200000")))
+        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "200000"), null))
                 .hasMessageContaining("Insufficient balance");
         verify(transactionRepository, never()).save(any());
         verify(lock).unlock();
@@ -134,7 +136,7 @@ class TransferServiceTest {
         // The repository query sums PENDING + COMPLETED; 4.9M used so far today
         when(transactionRepository.sumDailyTransfers(eq(alice), any())).thenReturn(new BigDecimal("4900000"));
 
-        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "200000")))
+        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "200000"), null))
                 .hasMessageContaining("Daily transfer limit exceeded");
         verify(transactionRepository, never()).save(any());
     }
@@ -156,7 +158,7 @@ class TransferServiceTest {
         when(redisTemplate.opsForStream()).thenReturn(streamOps);
         when(streamOps.add(any())).thenReturn(RecordId.autoGenerate());
 
-        TransferResponse response = service.initiateTransfer(request(alice, bob, "1000000"));
+        TransferResponse response = service.initiateTransfer(request(alice, bob, "1000000"), null).response();
 
         assertThat(response.getStatus()).isEqualTo("PENDING");
         verify(redissonClient).getLock("lock:account:" + alice);
@@ -214,6 +216,80 @@ class TransferServiceTest {
         service.rejectTransfer(id);
 
         verify(transactionRepository, never()).updateStatus(any(), any(), any());
+    }
+
+    // ==================== Idempotency-Key ====================
+
+    @Test
+    void sameIdempotencyKeyAndBodyReturnsOriginalTransfer() throws Exception {
+        loginAs(alice, "USER");
+        givenLockAcquired();
+        TransferRequest req = request(alice, bob, "1000000");
+        Transaction original = txn(alice, bob, "COMPLETED");
+        original.setIdempotencyKey("key-1");
+        original.setRequestHash(TransferService.fingerprint(req));
+        when(transactionRepository.findByFromAccountIdAndIdempotencyKey(alice, "key-1"))
+                .thenReturn(Optional.of(original));
+
+        // Same transfer, amount written differently: still the same request
+        TransferResult result = service.initiateTransfer(request(alice, bob, "1000000.00"), "key-1");
+
+        assertThat(result.replayed()).isTrue();
+        assertThat(result.response().getTransactionId()).isEqualTo(original.getId());
+        verify(transactionRepository, never()).save(any());
+        verify(redisTemplate, never()).opsForStream();
+        verify(lock).unlock();
+    }
+
+    @Test
+    void sameIdempotencyKeyWithDifferentBodyIsRejected() throws Exception {
+        loginAs(alice, "USER");
+        givenLockAcquired();
+        Transaction original = txn(alice, bob, "PENDING");
+        original.setIdempotencyKey("key-1");
+        original.setRequestHash(TransferService.fingerprint(request(alice, bob, "1000000")));
+        when(transactionRepository.findByFromAccountIdAndIdempotencyKey(alice, "key-1"))
+                .thenReturn(Optional.of(original));
+
+        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "2000000"), "key-1"))
+                .isInstanceOf(IdempotencyConflictException.class);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    void newIdempotencyKeyIsStoredWithTheTransfer() throws Exception {
+        loginAs(alice, "USER");
+        givenLockAcquired();
+        givenAccounts("10000000", "50000000");
+        when(transactionRepository.findByFromAccountIdAndIdempotencyKey(alice, "key-2")).thenReturn(Optional.empty());
+        when(transactionRepository.sumPendingOutgoing(alice)).thenReturn(BigDecimal.ZERO);
+        when(transactionRepository.sumDailyTransfers(eq(alice), any())).thenReturn(BigDecimal.ZERO);
+        when(transactionRepository.save(any())).thenAnswer(inv -> {
+            Transaction t = inv.getArgument(0);
+            t.setId(UUID.randomUUID());
+            return t;
+        });
+        @SuppressWarnings("unchecked")
+        StreamOperations<String, Object, Object> streamOps = mock(StreamOperations.class);
+        when(redisTemplate.opsForStream()).thenReturn(streamOps);
+        when(streamOps.add(any())).thenReturn(RecordId.autoGenerate());
+
+        TransferResult result = service.initiateTransfer(request(alice, bob, "1000000"), "key-2");
+
+        assertThat(result.replayed()).isFalse();
+        ArgumentCaptor<Transaction> saved = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(saved.capture());
+        assertThat(saved.getValue().getIdempotencyKey()).isEqualTo("key-2");
+        assertThat(saved.getValue().getRequestHash()).isEqualTo(TransferService.fingerprint(request(alice, bob, "1000000")));
+    }
+
+    @Test
+    void oversizedIdempotencyKeyIsRejected() {
+        loginAs(alice, "USER");
+
+        assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "1000000"), "x".repeat(65)))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(redissonClient);
     }
 
     // ==================== Helpers ====================

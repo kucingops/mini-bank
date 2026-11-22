@@ -45,6 +45,24 @@ mise run fraud            # terminal 3
 
 Task lain: `mise run test` (build + test semua service), `mise run openapi:export`, `mise run infra:down`. Lihat semua dengan `mise tasks`. Tidak ada env var yang wajib, karena `application.yml` sudah mengarah ke `localhost`.
 
+#### Tanpa Docker
+
+Kalau Docker tidak tersedia, pasang infrastrukturnya langsung di mesin:
+
+| Komponen | Dipakai oleh | Catatan |
+|---|---|---|
+| PostgreSQL 16+ | account, transaction | Buat user dan database di bawah |
+| Redis 7+ | semua service | Windows: [Memurai](https://www.memurai.com/) atau Redis di WSL |
+| Elasticsearch 8.x | fraud | Bisa dilewati kalau tidak menjalankan fraud-service; transfer akan tetap `PENDING` |
+
+```sql
+-- jalankan sebagai superuser postgres (psql -U postgres)
+CREATE USER minibank WITH PASSWORD 'minibank123';
+CREATE DATABASE minibank_bank OWNER minibank;
+```
+
+Untuk Elasticsearch lokal, matikan security-nya (`xpack.security.enabled: false` di `config/elasticsearch.yml`), sama seperti di `docker-compose.yml`. Kalau host/port/user berbeda, override lewat env var, misalnya `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`, `SPRING_DATA_REDIS_HOST`, `SPRING_ELASTICSEARCH_URIS`.
+
 > Pengguna Nix bisa memakai `nix develop` (lihat `flake.nix`).
 
 ### Opsi B — Semua di Docker

@@ -45,8 +45,9 @@ dir = "fraud-service"
 run = "mvn -B verify"
 
 [tasks.test]
-description = "Build and test all services"
-depends = ["test:account", "test:transaction", "test:fraud"]
+description = "Build and test all services (one after another)"
+# Sequential on purpose: parallel Maven runs on an empty ~/.m2 corrupt downloaded POMs
+run = ["mise run test:account", "mise run test:transaction", "mise run test:fraud"]
 
 [tasks."openapi:export"]
 description = "Regenerate docs/openapi/*.json (services must be running; needs bash, curl, jq — Git Bash/WSL on Windows)"

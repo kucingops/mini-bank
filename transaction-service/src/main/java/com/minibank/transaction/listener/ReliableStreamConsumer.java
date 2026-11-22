@@ -3,6 +3,7 @@ package com.minibank.transaction.listener;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.*;
+import org.springframework.data.redis.connection.RedisStreamCommands;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StreamOperations;
@@ -122,14 +123,19 @@ public class ReliableStreamConsumer {
     }
 
     /**
-     * Transfers ownership of a pending record to this consumer (raw XCLAIM).
-     * Sent as a raw command because Redisson's Spring Data xClaim adapter throws an NPE.
+     * Transfers ownership of a pending record to this consumer. XCLAIM (without JUSTID) bumps
+     * the delivery count. Raw bytes are returned, so nothing is deserialized here.
      */
     private boolean claim(String stream, RecordId id) {
-        Object result = redisTemplate.execute((RedisCallback<Object>) connection -> connection.execute("XCLAIM",
-                bytes(stream), bytes(group), bytes(consumerName),
-                bytes(String.valueOf(minIdle.toMillis())), bytes(id.getValue())));
-        return result instanceof List<?> list && !list.isEmpty();
+        // Redisson's adapter sends getIdleTime() as XCLAIM's min-idle-time argument (and throws
+        // if it is unset), while Lettuce sends minIdle() there and idle() as the IDLE option.
+        // Setting both works for either client; on Lettuce it only means a failed record is
+        // retried on the next reclaim pass instead of after a further minIdle.
+        RedisStreamCommands.XClaimOptions options = RedisStreamCommands.XClaimOptions
+                .minIdle(minIdle).ids(id).idle(minIdle);
+        List<ByteRecord> claimed = redisTemplate.execute((RedisCallback<List<ByteRecord>>) connection ->
+                connection.streamCommands().xClaim(bytes(stream), group, consumerName, options));
+        return claimed != null && !claimed.isEmpty();
     }
 
     private void process(String stream, MapRecord<String, Object, Object> record,

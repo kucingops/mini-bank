@@ -3,7 +3,6 @@ package com.minibank.transaction.listener;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.*;
-import org.springframework.data.redis.connection.RedisStreamCommands;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StreamOperations;
@@ -93,29 +92,44 @@ public class ReliableStreamConsumer {
             if (message.getElapsedTimeSinceLastDelivery().compareTo(minIdle) < 0) {
                 continue;
             }
-            if (message.getTotalDeliveryCount() >= maxDeliveries) {
-                deadLetter(stream, message);
+            RecordId id = message.getId();
+            // XCLAIM bumps the delivery count, so the attempt is counted even if the
+            // payload turns out to be unreadable below
+            if (!claim(stream, id)) {
+                continue; // claimed by another instance in the meantime, or trimmed
+            }
+            long deliveries = message.getTotalDeliveryCount() + 1;
+            if (deliveries > maxDeliveries) {
+                deadLetter(stream, id, deliveries - 1);
                 continue;
             }
-            List<MapRecord<String, Object, Object>> claimed;
+
+            List<MapRecord<String, Object, Object>> records;
             try {
-                claimed = ops().claim(stream, group, consumerName, minIdle, message.getId());
+                records = ops().range(stream, Range.closed(id.getValue(), id.getValue()));
             } catch (Exception e) {
-                // Claimed on the server but the payload cannot be deserialized. The delivery
-                // count still went up, so it is dead-lettered once it reaches maxDeliveries.
                 log.error("Cannot read pending record {} on '{}' (delivery #{}): {}",
-                        message.getId(), stream, message.getTotalDeliveryCount() + 1, e.getMessage());
+                        id, stream, deliveries, e.getMessage());
                 continue;
             }
-            if (claimed.isEmpty()) {
-                // Trimmed from the stream or claimed by another instance in the meantime
+            if (records == null || records.isEmpty()) {
+                ops().acknowledge(stream, group, id); // entry was trimmed; nothing left to process
                 continue;
             }
-            MapRecord<String, Object, Object> record = claimed.get(0);
-            log.info("Retrying record {} on '{}' (delivery #{})",
-                    record.getId(), stream, message.getTotalDeliveryCount() + 1);
-            process(stream, record, handler);
+            log.info("Retrying record {} on '{}' (delivery #{})", id, stream, deliveries);
+            process(stream, records.get(0), handler);
         }
+    }
+
+    /**
+     * Transfers ownership of a pending record to this consumer (raw XCLAIM).
+     * Sent as a raw command because Redisson's Spring Data xClaim adapter throws an NPE.
+     */
+    private boolean claim(String stream, RecordId id) {
+        Object result = redisTemplate.execute((RedisCallback<Object>) connection -> connection.execute("XCLAIM",
+                bytes(stream), bytes(group), bytes(consumerName),
+                bytes(String.valueOf(minIdle.toMillis())), bytes(id.getValue())));
+        return result instanceof List<?> list && !list.isEmpty();
     }
 
     private void process(String stream, MapRecord<String, Object, Object> record,
@@ -131,21 +145,12 @@ public class ReliableStreamConsumer {
     }
 
     /**
-     * Claims the record by ID only (no deserialization, so this works for malformed payloads),
-     * copies the raw entry to {@code <stream>:dlq} and acknowledges it.
+     * Copies the raw entry (no deserialization, so malformed payloads work too) to
+     * {@code <stream>:dlq} and acknowledges it. The record must already be claimed.
      */
-    private void deadLetter(String stream, PendingMessage message) {
-        RecordId id = message.getId();
-        byte[] key = stream.getBytes(StandardCharsets.UTF_8);
-        byte[] dlqKey = (stream + ":dlq").getBytes(StandardCharsets.UTF_8);
-
-        Boolean moved = redisTemplate.execute((RedisCallback<Boolean>) connection -> {
-            List<RecordId> claimed = connection.streamCommands().xClaimJustId(key, group, consumerName,
-                    RedisStreamCommands.XClaimOptions.minIdle(minIdle).ids(id));
-            if (claimed == null || claimed.isEmpty()) {
-                return false; // claimed by another instance in the meantime
-            }
-
+    private void deadLetter(String stream, RecordId id, long deliveries) {
+        byte[] key = bytes(stream);
+        redisTemplate.execute((RedisCallback<Void>) connection -> {
             Map<byte[], byte[]> payload = new LinkedHashMap<>();
             List<ByteRecord> raw = connection.streamCommands().xRange(key,
                     Range.closed(id.getValue(), id.getValue()));
@@ -154,18 +159,14 @@ public class ReliableStreamConsumer {
             }
             payload.put(bytes("dlq.originalStream"), bytes(stream));
             payload.put(bytes("dlq.originalId"), bytes(id.getValue()));
-            payload.put(bytes("dlq.deliveryCount"), bytes(String.valueOf(message.getTotalDeliveryCount())));
+            payload.put(bytes("dlq.deliveryCount"), bytes(String.valueOf(deliveries)));
             payload.put(bytes("dlq.deadLetteredAt"), bytes(LocalDateTime.now().toString()));
 
-            connection.streamCommands().xAdd(StreamRecords.newRecord().in(dlqKey).ofMap(payload));
+            connection.streamCommands().xAdd(StreamRecords.newRecord().in(bytes(stream + ":dlq")).ofMap(payload));
             connection.streamCommands().xAck(key, group, id);
-            return true;
+            return null;
         });
-
-        if (Boolean.TRUE.equals(moved)) {
-            log.error("Record {} on '{}' failed {} times — moved to '{}:dlq'",
-                    id, stream, message.getTotalDeliveryCount(), stream);
-        }
+        log.error("Record {} on '{}' failed {} times — moved to '{}:dlq'", id, stream, deliveries, stream);
     }
 
     private static byte[] bytes(String value) {

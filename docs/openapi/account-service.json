@@ -734,7 +734,7 @@
                 }
               }
             },
-            "description": "OK"
+            "description": "Authenticated; tokens returned"
           },
           "400": {
             "content": {
@@ -745,6 +745,16 @@
               }
             },
             "description": "Invalid request: validation failed or a parameter is malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid email or password"
           },
           "500": {
             "content": {
@@ -842,7 +852,7 @@
                 }
               }
             },
-            "description": "OK"
+            "description": "New token pair returned"
           },
           "400": {
             "content": {
@@ -853,6 +863,16 @@
               }
             },
             "description": "Invalid request: validation failed or a parameter is malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Refresh token invalid or expired"
           },
           "500": {
             "content": {
@@ -906,6 +926,16 @@
               }
             },
             "description": "Invalid request: validation failed or a parameter is malformed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Email already registered"
           },
           "500": {
             "content": {

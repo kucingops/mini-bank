@@ -2,7 +2,10 @@ package com.minibank.account.service;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.minibank.account.dto.LoginRequest;
 import com.minibank.account.dto.RegisterRequest;
+import com.minibank.account.entity.UserCredential;
+import com.minibank.account.exception.ApiException;
 import com.minibank.account.entity.Account;
 import com.minibank.account.repository.AccountRepository;
 import com.minibank.account.repository.RefreshTokenRepository;
@@ -14,12 +17,15 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -59,5 +65,38 @@ class AuthServiceTest {
         verify(accountRepository).save(saved.capture());
         assertThat(saved.getValue().getBalance()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(saved.getValue().getDailyTransferLimit()).isEqualByComparingTo("50000000");
+    }
+
+    @Test
+    void wrongPasswordIsUnauthorized() {
+        when(userCredentialRepository.findByEmail("syarif@minibank.com")).thenReturn(Optional.of(
+                UserCredential.builder().email("syarif@minibank.com").password("hash").role("USER").build()));
+        when(passwordEncoder.matches("salah123", "hash")).thenReturn(false);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("syarif@minibank.com", "salah123")))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Invalid email or password")
+                .extracting("status").isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void unknownEmailIsUnauthorizedWithTheSameMessage() {
+        when(userCredentialRepository.findByEmail(any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("nobody@minibank.com", "x")))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Invalid email or password")
+                .extracting("status").isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void duplicateEmailIsConflict() {
+        when(userCredentialRepository.existsByEmail("syarif@minibank.com")).thenReturn(true);
+        RegisterRequest request = RegisterRequest.builder()
+                .holderName("Syarif").email("syarif@minibank.com").password("password123").build();
+
+        assertThatThrownBy(() -> authService.register(request))
+                .isInstanceOf(ApiException.class)
+                .extracting("status").isEqualTo(HttpStatus.CONFLICT);
     }
 }

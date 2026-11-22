@@ -8,6 +8,7 @@ import com.minibank.account.repository.AccountRepository;
 import com.minibank.account.repository.RefreshTokenRepository;
 import com.minibank.account.repository.UserCredentialRepository;
 import com.minibank.account.security.JwtUtil;
+import com.minibank.account.exception.ApiException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -39,7 +40,7 @@ public class AuthService {
     public AuthResponse register(RegisterRequest request) {
         // Check if email already exists
         if (userCredentialRepository.existsByEmail(request.getEmail())) {
-            throw new RuntimeException("Email already registered: " + request.getEmail());
+            throw ApiException.conflict("Email already registered: " + request.getEmail());
         }
 
         // Create the bank account
@@ -77,10 +78,10 @@ public class AuthService {
     @Transactional
     public AuthResponse login(LoginRequest request) {
         UserCredential credential = userCredentialRepository.findByEmail(request.email())
-                .orElseThrow(() -> new RuntimeException("Invalid email or password"));
+                .orElseThrow(() -> ApiException.unauthorized("Invalid email or password"));
 
         if (!passwordEncoder.matches(request.password(), credential.getPassword())) {
-            throw new RuntimeException("Invalid email or password");
+            throw ApiException.unauthorized("Invalid email or password");
         }
 
         log.info("User logged in: {}", credential.getEmail());
@@ -96,15 +97,15 @@ public class AuthService {
     @Transactional
     public AuthResponse refreshToken(RefreshTokenRequest request) {
         RefreshToken refreshToken = refreshTokenRepository.findByToken(request.refreshToken())
-                .orElseThrow(() -> new RuntimeException("Invalid refresh token"));
+                .orElseThrow(() -> ApiException.unauthorized("Invalid refresh token"));
 
         if (refreshToken.getExpiresAt().isBefore(LocalDateTime.now())) {
             refreshTokenRepository.delete(refreshToken);
-            throw new RuntimeException("Refresh token expired");
+            throw ApiException.unauthorized("Refresh token expired");
         }
 
         UserCredential credential = userCredentialRepository.findById(refreshToken.getUserId())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> ApiException.unauthorized("Invalid refresh token"));
 
         // Delete old refresh token and create new one
         refreshTokenRepository.delete(refreshToken);
@@ -119,7 +120,7 @@ public class AuthService {
     @Transactional
     public void logout(String email) {
         UserCredential credential = userCredentialRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> ApiException.unauthorized("User not found"));
 
         refreshTokenRepository.deleteByUserId(credential.getId());
         log.info("User logged out: {}", email);

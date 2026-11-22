@@ -5,6 +5,7 @@ import com.minibank.transaction.dto.TransferRequest;
 import com.minibank.transaction.dto.TransferResponse;
 import com.minibank.transaction.entity.Account;
 import com.minibank.transaction.entity.Transaction;
+import com.minibank.transaction.exception.ApiException;
 import com.minibank.transaction.exception.IdempotencyConflictException;
 import com.minibank.transaction.repository.AccountRepository;
 import com.minibank.transaction.repository.TransactionRepository;
@@ -87,7 +88,7 @@ public class TransferService {
 
         try {
             if (!lock.tryLock(LOCK_WAIT_SECONDS, LOCK_LEASE_SECONDS, TimeUnit.SECONDS)) {
-                throw new RuntimeException("Could not acquire lock for transfer. Please try again.");
+                throw ApiException.conflict("Another transfer from this account is in progress. Please try again.");
             }
 
             log.info("Distributed lock acquired for source account {}", request.getFromAccountId());
@@ -113,19 +114,19 @@ public class TransferService {
 
             // Validate accounts exist and are active
             Account fromAccount = accountRepository.findById(request.getFromAccountId())
-                    .orElseThrow(() -> new RuntimeException("Source account not found"));
+                    .orElseThrow(() -> ApiException.notFound("Source account not found"));
             Account toAccount = accountRepository.findById(request.getToAccountId())
-                    .orElseThrow(() -> new RuntimeException("Destination account not found"));
+                    .orElseThrow(() -> ApiException.notFound("Destination account not found"));
 
             if (!"ACTIVE".equals(fromAccount.getStatus()) || !"ACTIVE".equals(toAccount.getStatus())) {
-                throw new RuntimeException("Both accounts must be ACTIVE");
+                throw ApiException.badRequest("Both accounts must be ACTIVE");
             }
 
             // Check available balance — funds held by PENDING transfers are not spendable
             BigDecimal pending = transactionRepository.sumPendingOutgoing(request.getFromAccountId());
             BigDecimal available = fromAccount.getBalance().subtract(pending);
             if (available.compareTo(request.getAmount()) < 0) {
-                throw new RuntimeException("Insufficient balance. Available: " + available);
+                throw ApiException.badRequest("Insufficient balance. Available: " + available);
             }
 
             // Check daily transfer limit (PENDING + COMPLETED today)
@@ -156,7 +157,7 @@ public class TransferService {
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("Transfer interrupted", e);
+            throw ApiException.serviceUnavailable("Transfer interrupted. Please try again.");
         } finally {
             if (lock.isHeldByCurrentThread()) lock.unlock();
             log.debug("Distributed lock released");
@@ -168,7 +169,7 @@ public class TransferService {
      */
     public TransferResponse getTransfer(UUID transactionId) {
         Transaction txn = transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new RuntimeException("Transaction not found: " + transactionId));
+                .orElseThrow(() -> ApiException.notFound("Transaction not found: " + transactionId));
         if (!SecurityUtils.isAdmin()
                 && !SecurityUtils.isOwner(txn.getFromAccountId())
                 && !SecurityUtils.isOwner(txn.getToAccountId())) {
@@ -280,7 +281,7 @@ public class TransferService {
         BigDecimal usedToday = transactionRepository.sumDailyTransfers(accountId, startOfDay);
 
         if (usedToday.add(transferAmount).compareTo(dailyLimit) > 0) {
-            throw new RuntimeException(String.format(
+            throw ApiException.badRequest(String.format(
                     "Daily transfer limit exceeded. Limit: %s, Used today: %s, Requested: %s",
                     dailyLimit, usedToday, transferAmount));
         }
@@ -299,7 +300,7 @@ public class TransferService {
             return;
         }
         if (key.isBlank() || key.length() > MAX_IDEMPOTENCY_KEY_LENGTH) {
-            throw new IllegalArgumentException(
+            throw ApiException.badRequest(
                     "Idempotency-Key must be 1-" + MAX_IDEMPOTENCY_KEY_LENGTH + " characters");
         }
     }
@@ -325,7 +326,7 @@ public class TransferService {
 
     private void validateSameAccount(TransferRequest request) {
         if (request.getFromAccountId().equals(request.getToAccountId())) {
-            throw new RuntimeException("Cannot transfer to the same account");
+            throw ApiException.badRequest("Cannot transfer to the same account");
         }
     }
 

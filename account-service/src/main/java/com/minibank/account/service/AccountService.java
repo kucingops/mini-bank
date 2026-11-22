@@ -5,6 +5,7 @@ import com.minibank.account.dto.CreateAccountRequest;
 import com.minibank.account.dto.PageResponse;
 import com.minibank.account.entity.Account;
 import com.minibank.account.repository.AccountRepository;
+import com.minibank.account.exception.ApiException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -64,7 +65,7 @@ public class AccountService {
      */
     public AccountResponse getAccount(UUID accountId) {
         Account account = accountRepository.findById(accountId)
-                .orElseThrow(() -> new RuntimeException("Account not found: " + accountId));
+                .orElseThrow(() -> ApiException.notFound("Account not found: " + accountId));
         return toResponse(account);
     }
 
@@ -85,7 +86,7 @@ public class AccountService {
         // Cache miss — fetch from DB
         log.debug("Balance cache MISS for account {}", accountId);
         Account account = accountRepository.findById(accountId)
-                .orElseThrow(() -> new RuntimeException("Account not found: " + accountId));
+                .orElseThrow(() -> ApiException.notFound("Account not found: " + accountId));
 
         cacheBalance(accountId, account.getBalance());
         return account.getBalance();
@@ -109,7 +110,7 @@ public class AccountService {
      */
     public AccountResponse getAccountByNumber(String accountNumber) {
         Account account = accountRepository.findByAccountNumber(accountNumber)
-                .orElseThrow(() -> new RuntimeException("Account not found: " + accountNumber));
+                .orElseThrow(() -> ApiException.notFound("Account not found: " + accountNumber));
         return toResponse(account);
     }
 

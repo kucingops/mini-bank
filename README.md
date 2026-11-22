@@ -222,11 +222,11 @@ curl -X POST http://localhost:8081/api/v1/auth/login \
   -d '{"email":"syarif@minibank.com","password":"salah123"}'
 ```
 
-**Response yang diharapkan** (HTTP 404):
+**Response yang diharapkan** (HTTP 401):
 ```json
 {
-  "status": 404,
-  "error": "Not Found",
+  "status": 401,
+  "error": "Unauthorized",
   "message": "Invalid email or password",
   "path": "/api/v1/auth/login",
   "timestamp": "2026-02-25T10:15:30"
@@ -253,7 +253,7 @@ curl http://localhost:8081/api/v1/accounts \
 }
 ```
 
-> Semua error di ketiga service memakai format `ErrorResponse` yang sama (`status`, `error`, `message`, `path`, `timestamp`).
+> Semua error di ketiga service memakai format `ErrorResponse` yang sama (`status`, `error`, `message`, `path`, `timestamp`). Error database dan error tak terduga hanya mengembalikan pesan umum (`A database error occurred` / `Unexpected server error`); detailnya ada di log service.
 
 > Endpoint list (`GET /api/v1/accounts`, `/api/v1/transfers/history`, `/api/v1/audit/**`) memakai pagination: `?page=0&size=20&sort=createdAt,desc` (maks. `size=100`). Response-nya berbentuk `{ "content": [...], "page", "size", "totalElements", "totalPages" }`.
 

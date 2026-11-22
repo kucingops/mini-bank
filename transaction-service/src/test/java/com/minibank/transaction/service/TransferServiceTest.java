@@ -4,6 +4,7 @@ import com.minibank.transaction.dto.TransferRequest;
 import com.minibank.transaction.dto.TransferResponse;
 import com.minibank.transaction.entity.Account;
 import com.minibank.transaction.entity.Transaction;
+import com.minibank.transaction.exception.ApiException;
 import com.minibank.transaction.exception.IdempotencyConflictException;
 import com.minibank.transaction.repository.AccountRepository;
 import com.minibank.transaction.repository.TransactionRepository;
@@ -20,6 +21,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -288,7 +290,8 @@ class TransferServiceTest {
         loginAs(alice, "USER");
 
         assertThatThrownBy(() -> service.initiateTransfer(request(alice, bob, "1000000"), "x".repeat(65)))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(ApiException.class)
+                .extracting("status").isEqualTo(HttpStatus.BAD_REQUEST);
         verifyNoInteractions(redissonClient);
     }
 

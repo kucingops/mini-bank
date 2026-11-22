@@ -2,7 +2,10 @@ package com.minibank.account.controller;
 
 import com.minibank.account.dto.*;
 import com.minibank.account.service.AuthService;
+import com.minibank.account.dto.ErrorResponse;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,6 +27,7 @@ public class AuthController {
     @Operation(summary = "Register a new user",
             description = "Creates a new bank account (balance 0, default daily limit Rp 50.000.000) and user credentials. Returns JWT access and refresh tokens")
     @ApiResponse(responseCode = "201", description = "Registered; tokens returned")
+    @ApiResponse(responseCode = "409", description = "Email already registered", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     @SecurityRequirements // public: no token needed
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
@@ -33,6 +37,8 @@ public class AuthController {
 
     @Operation(summary = "Login",
             description = "Authenticates with email and password. Returns JWT access token (24h) and refresh token (7 days)")
+    @ApiResponse(responseCode = "200", description = "Authenticated; tokens returned")
+    @ApiResponse(responseCode = "401", description = "Invalid email or password", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     @SecurityRequirements // public: no token needed
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
@@ -42,6 +48,8 @@ public class AuthController {
 
     @Operation(summary = "Refresh access token",
             description = "Exchange a valid refresh token for a new access token and refresh token pair")
+    @ApiResponse(responseCode = "200", description = "New token pair returned")
+    @ApiResponse(responseCode = "401", description = "Refresh token invalid or expired", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     @SecurityRequirements // public: no token needed
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refreshToken(@Valid @RequestBody RefreshTokenRequest request) {

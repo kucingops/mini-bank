@@ -1,5 +1,6 @@
 package com.minibank.transaction.service;
 
+import com.minibank.transaction.dto.PageResponse;
 import com.minibank.transaction.dto.TransferRequest;
 import com.minibank.transaction.dto.TransferResponse;
 import com.minibank.transaction.entity.Account;
@@ -12,6 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.connection.stream.StreamRecords;
@@ -148,20 +152,17 @@ public class TransferService {
     }
 
     /**
-     * Get transaction history for an account.
-     * Demonstrates Java Stream API — filtering, sorting, and mapping.
+     * Get paginated transaction history for an account (sent and received).
+     * Demonstrates Java Stream API — mapping the page's entities to DTOs.
      */
-    public List<TransferResponse> getTransactionHistory(UUID accountId) {
+    public PageResponse<TransferResponse> getTransactionHistory(UUID accountId, Pageable pageable) {
         SecurityUtils.requireOwnerOrAdmin(accountId);
-        List<Transaction> transactions = transactionRepository
-                .findByFromAccountIdOrToAccountIdOrderByCreatedAtDesc(accountId, accountId);
+        Page<Transaction> page = transactionRepository.findHistory(accountId, pageable);
 
-        // Java Stream: filter out cancelled, sort, map to DTO
-        return transactions.stream()
-                .filter(t -> !"CANCELLED".equals(t.getStatus()))
-                .sorted(Comparator.comparing(Transaction::getCreatedAt).reversed())
+        List<TransferResponse> content = page.getContent().stream()
                 .map(this::toResponse)
                 .collect(Collectors.toList());
+        return PageResponse.of(new PageImpl<>(content, pageable, page.getTotalElements()));
     }
 
     /**

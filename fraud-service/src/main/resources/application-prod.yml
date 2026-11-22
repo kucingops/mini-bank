@@ -1,0 +1,11 @@
+# Production profile: activate with SPRING_PROFILES_ACTIVE=prod
+# Swagger UI and the OpenAPI spec are not exposed in production.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+logging:
+  level:
+    com.minibank: INFO

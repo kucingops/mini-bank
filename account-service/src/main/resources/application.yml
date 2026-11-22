@@ -21,6 +21,9 @@ spring:
         format_sql: true
 
   data:
+    web:
+      pageable:
+        max-page-size: 100   # cap ?size= on paginated endpoints
     redis:
       host: localhost
       port: 6379
@@ -40,3 +43,26 @@ logging:
   level:
     com.minibank: DEBUG
     org.hibernate.SQL: DEBUG
+
+springdoc:
+  writer-with-order-by-keys: true   # deterministic spec output (docs/openapi/*.json)
+  default-produces-media-type: application/json
+  swagger-ui:
+    persist-authorization: true     # keep the JWT across page reloads and definition switches
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    # One Swagger UI for all services: pick the service in the "Select a definition" dropdown.
+    urls-primary-name: account-service
+    urls:
+      - name: account-service
+        url: /v3/api-docs
+      - name: transaction-service
+        url: ${TRANSACTION_SERVICE_PUBLIC_URL:http://localhost:8082}/v3/api-docs
+      - name: fraud-service
+        url: ${FRAUD_SERVICE_PUBLIC_URL:http://localhost:8083}/v3/api-docs
+
+# Origins allowed to call this service from a browser (the combined Swagger UI lives on account-service)
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8081}

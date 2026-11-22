@@ -61,13 +61,23 @@ Semua container harus berstatus **Up**:
 
 ### Langkah 3 — Buka Swagger UI
 
-Setiap service punya dokumentasi API interaktif (ada tombol **Authorize** untuk JWT):
+Buka **http://localhost:8081/swagger-ui.html**. Ketiga service ada di satu Swagger UI: pilih service lewat dropdown **Select a definition** di kanan atas.
 
-| Service | URL |
-|---|---|
-| Account Service | http://localhost:8081/swagger-ui.html |
-| Transaction Service | http://localhost:8082/swagger-ui.html |
-| Fraud & Audit Service | http://localhost:8083/swagger-ui.html |
+1. Jalankan `POST /api/v1/auth/login` (contoh request sudah terisi), salin `accessToken`.
+2. Klik **Authorize**, tempel token-nya. Token tetap tersimpan saat pindah service atau reload halaman.
+3. Endpoint lain bisa langsung dicoba dengan **Try it out**.
+
+Setiap endpoint mendokumentasikan contoh request/response, kemungkinan error (400/401/403/404/500), dan parameter pagination. Swagger per service juga masih bisa dibuka langsung:
+
+| Service | Swagger UI | Spec OpenAPI |
+|---|---|---|
+| Account Service | http://localhost:8081/swagger-ui.html | http://localhost:8081/v3/api-docs |
+| Transaction Service | http://localhost:8082/swagger-ui.html | http://localhost:8082/v3/api-docs |
+| Fraud & Audit Service | http://localhost:8083/swagger-ui.html | http://localhost:8083/v3/api-docs |
+
+Spec hasil ekspor disimpan di [`docs/openapi/`](docs/openapi). Kalau API berubah, jalankan `./scripts/export-openapi.sh` (saat stack menyala) dan commit hasilnya; CI akan gagal kalau spec tidak ikut diperbarui.
+
+> Di production (`SPRING_PROFILES_ACTIVE=prod`) Swagger UI dan `/v3/api-docs` dimatikan.
 
 ### Akun Default (Seed Data)
 
@@ -99,7 +109,7 @@ Berikut langkah-langkah untuk melakukan transfer yang sukses dari awal sampai ak
 ### Step 1 — Login sebagai USER
 
 ```bash
-curl -X POST http://localhost:8081/api/auth/login \
+curl -X POST http://localhost:8081/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"syarif@minibank.com","password":"password123"}'
 ```
@@ -121,7 +131,7 @@ curl -X POST http://localhost:8081/api/auth/login \
 ### Step 2 — Cek Saldo Akun Pengirim
 
 ```bash
-curl http://localhost:8081/api/accounts/{accountId}/balance \
+curl http://localhost:8081/api/v1/accounts/{accountId}/balance \
   -H "Authorization: Bearer {accessToken}"
 ```
 
@@ -132,7 +142,7 @@ curl http://localhost:8081/api/accounts/{accountId}/balance \
 Transfer Rp 1.000.000 ke akun lain (login dulu sebagai Budi untuk mendapatkan `accountId` tujuan, atau gunakan akun Budi langsung):
 
 ```bash
-curl -X POST http://localhost:8082/api/transfers \
+curl -X POST http://localhost:8082/api/v1/transfers \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer {accessToken}" \
   -d '{
@@ -161,7 +171,7 @@ curl -X POST http://localhost:8082/api/transfers \
 Tunggu 1-2 detik, lalu cek status:
 
 ```bash
-curl http://localhost:8082/api/transfers/{transactionId} \
+curl http://localhost:8082/api/v1/transfers/{transactionId} \
   -H "Authorization: Bearer {accessToken}"
 ```
 
@@ -170,7 +180,7 @@ curl http://localhost:8082/api/transfers/{transactionId} \
 {
   "transactionId": "uuid-transaksi...",
   "status": "COMPLETED",
-  "fraudCheckStatus": "APPROVED",
+  "fraudCheckStatus": "PASSED",
   "amount": 1000000
 }
 ```
@@ -186,7 +196,7 @@ curl http://localhost:8082/api/transfers/{transactionId} \
 Transfer di atas Rp 50.000.000 akan memicu fraud rule **Large Amount** dengan risk score +30.
 
 ```bash
-curl -X POST http://localhost:8082/api/transfers \
+curl -X POST http://localhost:8082/api/v1/transfers \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer {accessToken}" \
   -d '{
@@ -204,16 +214,19 @@ Lalu cek status — kemungkinan besar **REJECTED** karena jumlahnya memicu fraud
 ### Skenario: Login dengan Password Salah
 
 ```bash
-curl -X POST http://localhost:8081/api/auth/login \
+curl -X POST http://localhost:8081/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"syarif@minibank.com","password":"salah123"}'
 ```
 
-**Response yang diharapkan** (HTTP 500):
+**Response yang diharapkan** (HTTP 404):
 ```json
 {
-  "error": "Internal Server Error",
-  "message": "Invalid email or password"
+  "status": 404,
+  "error": "Not Found",
+  "message": "Invalid email or password",
+  "path": "/api/v1/auth/login",
+  "timestamp": "2026-02-25T10:15:30"
 }
 ```
 
@@ -222,23 +235,31 @@ curl -X POST http://localhost:8081/api/auth/login \
 Login sebagai USER biasa, lalu coba akses endpoint admin:
 
 ```bash
-curl http://localhost:8081/api/accounts \
+curl http://localhost:8081/api/v1/accounts \
   -H "Authorization: Bearer {accessToken_user}"
 ```
 
 **Response yang diharapkan** (HTTP 403 Forbidden):
 ```json
 {
-  "error": "Forbidden"
+  "status": 403,
+  "error": "Forbidden",
+  "message": "You do not have permission to access this resource",
+  "path": "/api/v1/accounts",
+  "timestamp": "2026-02-25T10:15:30"
 }
 ```
 
-> 🔒 Endpoint `GET /api/accounts` (list semua akun) hanya bisa diakses oleh role **ADMIN**.
+> Semua error di ketiga service memakai format `ErrorResponse` yang sama (`status`, `error`, `message`, `path`, `timestamp`).
+
+> Endpoint list (`GET /api/v1/accounts`, `/api/v1/transfers/history`, `/api/v1/audit/**`) memakai pagination: `?page=0&size=20&sort=createdAt,desc` (maks. `size=100`). Response-nya berbentuk `{ "content": [...], "page", "size", "totalElements", "totalPages" }`.
+
+> 🔒 Endpoint `GET /api/v1/accounts` (list semua akun) hanya bisa diakses oleh role **ADMIN**.
 
 ### Skenario: Akses Tanpa Token
 
 ```bash
-curl http://localhost:8081/api/accounts
+curl http://localhost:8081/api/v1/accounts
 ```
 
 **Response yang diharapkan** (HTTP 401 Unauthorized).
@@ -359,7 +380,7 @@ sequenceDiagram
     participant FS as Fraud Service
     participant ES as Elasticsearch
 
-    C->>TS: POST /api/transfers
+    C->>TS: POST /api/v1/transfers
     TS->>R: 1. Acquire distributed lock (kedua akun)
     TS->>R: 2. Cek daily transfer limit (cache)
     TS->>PG: 3. INSERT transaksi status PENDING
@@ -399,17 +420,17 @@ sequenceDiagram
 
 | Endpoint | USER | ADMIN | Keterangan |
 |---|---|---|---|
-| `POST /api/auth/*` | ✅ | ✅ | Login, register, refresh — publik. Akun hasil register selalu mulai dengan saldo 0 dan limit default. |
-| `POST /api/accounts` | ❌ | ✅ | Hanya admin yang bisa buat akun secara manual. |
-| `GET /api/accounts` | ❌ | ✅ | List semua akun — admin only. |
-| `GET /api/accounts/{id}` | ✅* | ✅ | *USER hanya bisa lihat akun sendiri. |
-| `GET /api/accounts/{id}/balance` | ✅* | ✅ | *USER hanya bisa lihat saldo sendiri. |
-| `GET /api/accounts/by-number/{no}` | ✅* | ✅ | *Untuk akun orang lain hanya field publik (id, nomor, nama, status). |
-| `POST /api/transfers` | ✅* | ❌ | *Hanya dari akun milik sendiri (`fromAccountId` harus sama dengan akun di JWT). |
-| `GET /api/transfers/{id}` | ✅* | ✅ | *Hanya pengirim atau penerima. |
-| `GET /api/transfers/history` | ✅* | ✅ | *USER hanya bisa lihat riwayat akun sendiri. |
-| `GET /api/reconciliation/**` | ❌ | ✅ | Laporan rekonsiliasi harian — admin only. |
-| `GET /api/audit/**` | ❌ | ✅ | Audit trail dan pencarian — admin only. |
+| `POST /api/v1/auth/*` | ✅ | ✅ | Login, register, refresh — publik. Akun hasil register selalu mulai dengan saldo 0 dan limit default. |
+| `POST /api/v1/accounts` | ❌ | ✅ | Hanya admin yang bisa buat akun secara manual. |
+| `GET /api/v1/accounts` | ❌ | ✅ | List semua akun — admin only. |
+| `GET /api/v1/accounts/{id}` | ✅* | ✅ | *USER hanya bisa lihat akun sendiri. |
+| `GET /api/v1/accounts/{id}/balance` | ✅* | ✅ | *USER hanya bisa lihat saldo sendiri. |
+| `GET /api/v1/accounts/by-number/{no}` | ✅* | ✅ | *Untuk akun orang lain hanya field publik (id, nomor, nama, status). |
+| `POST /api/v1/transfers` | ✅* | ❌ | *Hanya dari akun milik sendiri (`fromAccountId` harus sama dengan akun di JWT). |
+| `GET /api/v1/transfers/{id}` | ✅* | ✅ | *Hanya pengirim atau penerima. |
+| `GET /api/v1/transfers/history` | ✅* | ✅ | *USER hanya bisa lihat riwayat akun sendiri. |
+| `GET /api/v1/reconciliation/**` | ❌ | ✅ | Laporan rekonsiliasi harian — admin only. |
+| `GET /api/v1/audit/**` | ❌ | ✅ | Audit trail dan pencarian — admin only. |
 
 ---
 
@@ -457,7 +478,7 @@ minibank/
 
 ```bash
 # Contoh: laporan rekonsiliasi tanggal 25 Feb 2026
-curl http://localhost:8082/api/reconciliation/daily?date=2026-02-25 \
+curl http://localhost:8082/api/v1/reconciliation/daily?date=2026-02-25 \
   -H "Authorization: Bearer {accessToken_admin}"
 ```
 

@@ -43,4 +43,5 @@
 !fraud-service/src/
 !fraud-service/src/**
 !flake.nix
+!mise.toml
 !flake.lock

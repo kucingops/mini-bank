@@ -1,0 +1,54 @@
+# Local development toolchain for mini-bank (https://mise.jdx.dev)
+#   mise install            # installs Java 25 + Maven
+#   mise run infra          # Postgres, Redis, Elasticsearch in Docker
+#   mise run account        # then transaction / fraud, each in its own terminal
+#   mise tasks              # list everything
+
+[tools]
+java = "temurin-25"   # pom.xml targets Java 25
+maven = "3.9"
+
+[tasks.infra]
+description = "Start Postgres, Redis and Elasticsearch in Docker"
+run = "docker compose up -d postgres redis elasticsearch"
+
+[tasks."infra:down"]
+description = "Stop the Docker infrastructure (`docker compose down -v` also wipes data)"
+run = "docker compose down"
+
+[tasks.account]
+description = "Run account-service on :8081 (start this first; it seeds the data)"
+dir = "account-service"
+run = "mvn spring-boot:run"
+
+[tasks.transaction]
+description = "Run transaction-service on :8082"
+dir = "transaction-service"
+run = "mvn spring-boot:run"
+
+[tasks.fraud]
+description = "Run fraud-service on :8083"
+dir = "fraud-service"
+run = "mvn spring-boot:run"
+
+# One task per service so `dir` works on every OS (no shell loops; also works with cmd on Windows)
+[tasks."test:account"]
+dir = "account-service"
+run = "mvn -B verify"
+
+[tasks."test:transaction"]
+dir = "transaction-service"
+run = "mvn -B verify"
+
+[tasks."test:fraud"]
+dir = "fraud-service"
+run = "mvn -B verify"
+
+[tasks.test]
+description = "Build and test all services"
+depends = ["test:account", "test:transaction", "test:fraud"]
+
+[tasks."openapi:export"]
+description = "Regenerate docs/openapi/*.json (services must be running; needs bash, curl, jq — Git Bash/WSL on Windows)"
+shell = "bash -c"
+run = "./scripts/export-openapi.sh"

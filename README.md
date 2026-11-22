@@ -24,11 +24,32 @@ Sistem transfer dana terdistribusi dengan deteksi fraud secara real-time menggun
 
 | Tool | Versi |
 |---|---|
-| Java | 25+ |
-| Maven | 3.8+ |
-| Docker | Terbaru |
+| Java | 25 (Temurin) |
+| Maven | 3.9+ |
+| Docker + Compose | Terbaru |
 
-### Langkah 1 — Jalankan Semua (Build + Start)
+Kebutuhan mesin: ±4 GB RAM kosong (Elasticsearch ±1 GB, tiap service Java ±400–600 MB) dan ±3 GB disk untuk image Docker. Port yang dipakai: 8081, 8082, 8083, 5432, 6379, 9200. Opsional: `curl` + `jq` untuk `scripts/export-openapi.sh`.
+
+### Opsi A — Development lokal dengan [mise](https://mise.jdx.dev)
+
+Repo ini punya `mise.toml` yang memasang Java 25 dan Maven, plus task untuk menjalankan semuanya. Infrastruktur jalan di Docker, sedangkan service jalan langsung di mesin (lebih cepat untuk debug dan restart).
+
+```bash
+mise install              # pasang Java 25 + Maven
+mise run infra            # Postgres, Redis, Elasticsearch (Docker)
+
+mise run account          # terminal 1 — jalankan dulu, ini yang mengisi data awal
+mise run transaction      # terminal 2
+mise run fraud            # terminal 3
+```
+
+Task lain: `mise run test` (build + test semua service), `mise run openapi:export`, `mise run infra:down`. Lihat semua dengan `mise tasks`. Tidak ada env var yang wajib, karena `application.yml` sudah mengarah ke `localhost`.
+
+> Pengguna Nix bisa memakai `nix develop` (lihat `flake.nix`).
+
+### Opsi B — Semua di Docker
+
+#### Langkah 1 — Jalankan Semua (Build + Start)
 
 Cukup satu perintah untuk build semua service dan menjalankan seluruh infrastruktur:
 
@@ -42,7 +63,7 @@ docker compose up --build
 > - Menjalankan **migrasi otomatis** (Hibernate `ddl-auto: update` membuat tabel secara otomatis dari entity Java)
 > - Menjalankan **DataSeeder** untuk memasukkan data awal (5 akun + 1 admin)
 
-### Langkah 2 — Pastikan Semua Service Berjalan
+#### Langkah 2 — Pastikan Semua Service Berjalan
 
 ```bash
 docker ps

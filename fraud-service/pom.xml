@@ -20,6 +20,8 @@
     <properties>
         <java.version>25</java.version>
         <lombok.version>1.18.42</lombok.version>
+        <!-- Spring Boot 3.4 manages Byte Buddy 1.15, which cannot instrument Java 25 classes (Mockito fails on JDK 25) -->
+        <byte-buddy.version>1.18.17</byte-buddy.version>
     </properties>
 
     <dependencies>

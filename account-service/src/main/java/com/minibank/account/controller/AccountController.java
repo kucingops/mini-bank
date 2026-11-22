@@ -2,6 +2,7 @@ package com.minibank.account.controller;
 
 import com.minibank.account.dto.AccountResponse;
 import com.minibank.account.dto.CreateAccountRequest;
+import com.minibank.account.security.SecurityUtils;
 import com.minibank.account.service.AccountService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -40,12 +41,14 @@ public class AccountController {
     @Operation(summary = "Get account by ID", description = "Retrieves a single account by its UUID")
     @GetMapping("/{id}")
     public ResponseEntity<AccountResponse> getAccount(@PathVariable UUID id) {
+        SecurityUtils.requireOwnerOrAdmin(id);
         return ResponseEntity.ok(accountService.getAccount(id));
     }
 
     @Operation(summary = "Get account balance", description = "Returns the cached balance for an account (served from Redis cache)")
     @GetMapping("/{id}/balance")
     public ResponseEntity<Map<String, Object>> getBalance(@PathVariable UUID id) {
+        SecurityUtils.requireOwnerOrAdmin(id);
         BigDecimal balance = accountService.getBalance(id);
         return ResponseEntity.ok(Map.of(
                 "accountId", id,
@@ -53,9 +56,15 @@ public class AccountController {
         ));
     }
 
-    @Operation(summary = "Find account by account number", description = "Looks up an account using its unique account number")
+    @Operation(summary = "Find account by account number",
+            description = "Looks up an account using its unique account number. Owners and admins get full details; "
+                    + "other users only get the public fields needed to address a transfer (id, number, holder name, status)")
     @GetMapping("/by-number/{accountNumber}")
     public ResponseEntity<AccountResponse> getByAccountNumber(@PathVariable String accountNumber) {
-        return ResponseEntity.ok(accountService.getAccountByNumber(accountNumber));
+        AccountResponse account = accountService.getAccountByNumber(accountNumber);
+        if (SecurityUtils.isAdmin() || SecurityUtils.isOwner(account.getId())) {
+            return ResponseEntity.ok(account);
+        }
+        return ResponseEntity.ok(AccountResponse.publicView(account));
     }
 }

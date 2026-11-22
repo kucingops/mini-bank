@@ -18,14 +18,24 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     List<Transaction> findByFromAccountIdOrToAccountIdOrderByCreatedAtDesc(UUID fromId, UUID toId);
 
     /**
-     * Sum of completed transfers from an account today — for daily limit check.
+     * Sum of transfers from an account today that count against the daily limit.
+     * PENDING transfers are included so that several in-flight requests cannot
+     * jointly exceed the limit before the fraud check completes them.
      */
     @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
             "WHERE t.fromAccountId = :accountId " +
-            "AND t.status = 'COMPLETED' " +
+            "AND t.status IN ('PENDING', 'COMPLETED') " +
             "AND t.createdAt >= :startOfDay")
     BigDecimal sumDailyTransfers(@Param("accountId") UUID accountId,
                                  @Param("startOfDay") LocalDateTime startOfDay);
+
+    /**
+     * Total amount of outgoing transfers that are still PENDING — reserved funds
+     * that are not yet debited from the balance.
+     */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
+            "WHERE t.fromAccountId = :accountId AND t.status = 'PENDING'")
+    BigDecimal sumPendingOutgoing(@Param("accountId") UUID accountId);
 
     /**
      * Count transactions in the last hour — for fraud rate limiting.
@@ -120,4 +130,17 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     void updateStatus(@Param("id") UUID id,
                       @Param("status") String status,
                       @Param("fraudStatus") String fraudStatus);
+
+    /**
+     * Compare-and-set status transition. Only updates the row if it is still in
+     * {@code expectedStatus}; returns the number of rows changed (0 = already handled).
+     * Used to make stream event handling idempotent.
+     */
+    @Modifying
+    @Query("UPDATE Transaction t SET t.status = :status, t.fraudCheckStatus = :fraudStatus, t.updatedAt = CURRENT_TIMESTAMP " +
+            "WHERE t.id = :id AND t.status = :expectedStatus")
+    int transitionStatus(@Param("id") UUID id,
+                         @Param("expectedStatus") String expectedStatus,
+                         @Param("status") String status,
+                         @Param("fraudStatus") String fraudStatus);
 }

@@ -3,8 +3,6 @@ package com.minibank.account.dto;
 import jakarta.validation.constraints.*;
 import lombok.*;
 
-import java.math.BigDecimal;
-
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -22,10 +20,4 @@ public class RegisterRequest {
     @NotBlank(message = "Password is required")
     @Size(min = 6, message = "Password must be at least 6 characters")
     private String password;
-
-    @DecimalMin(value = "0.00", message = "Initial balance cannot be negative")
-    private BigDecimal initialBalance;
-
-    @DecimalMin(value = "1000000.00", message = "Daily transfer limit minimum Rp 1,000,000")
-    private BigDecimal dailyTransferLimit;
 }

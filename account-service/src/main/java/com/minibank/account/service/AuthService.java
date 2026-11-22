@@ -30,6 +30,8 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
 
+    private static final BigDecimal DEFAULT_DAILY_TRANSFER_LIMIT = new BigDecimal("50000000");
+
     /**
      * Register a new user — creates both Account and UserCredential.
      */
@@ -46,9 +48,10 @@ public class AuthService {
                 .accountNumber(accountNumber)
                 .holderName(request.getHolderName())
                 .email(request.getEmail())
-                .balance(request.getInitialBalance() != null ? request.getInitialBalance() : BigDecimal.ZERO)
-                .dailyTransferLimit(request.getDailyTransferLimit() != null ?
-                        request.getDailyTransferLimit() : new BigDecimal("50000000"))
+                // Self-registered accounts always start empty with the default limit.
+                // Funding and limit changes are admin-only (POST /api/accounts).
+                .balance(BigDecimal.ZERO)
+                .dailyTransferLimit(DEFAULT_DAILY_TRANSFER_LIMIT)
                 .status("ACTIVE")
                 .build();
         account = accountRepository.save(account);

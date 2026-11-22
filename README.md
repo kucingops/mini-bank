@@ -399,11 +399,15 @@ sequenceDiagram
 
 | Endpoint | USER | ADMIN | Keterangan |
 |---|---|---|---|
-| `POST /api/auth/*` | ✅ | ✅ | Login, register, refresh — publik. |
+| `POST /api/auth/*` | ✅ | ✅ | Login, register, refresh — publik. Akun hasil register selalu mulai dengan saldo 0 dan limit default. |
 | `POST /api/accounts` | ❌ | ✅ | Hanya admin yang bisa buat akun secara manual. |
 | `GET /api/accounts` | ❌ | ✅ | List semua akun — admin only. |
 | `GET /api/accounts/{id}` | ✅* | ✅ | *USER hanya bisa lihat akun sendiri. |
-| `POST /api/transfers` | ✅ | ✅ | Semua user bisa transfer. |
+| `GET /api/accounts/{id}/balance` | ✅* | ✅ | *USER hanya bisa lihat saldo sendiri. |
+| `GET /api/accounts/by-number/{no}` | ✅* | ✅ | *Untuk akun orang lain hanya field publik (id, nomor, nama, status). |
+| `POST /api/transfers` | ✅* | ❌ | *Hanya dari akun milik sendiri (`fromAccountId` harus sama dengan akun di JWT). |
+| `GET /api/transfers/{id}` | ✅* | ✅ | *Hanya pengirim atau penerima. |
+| `GET /api/transfers/history` | ✅* | ✅ | *USER hanya bisa lihat riwayat akun sendiri. |
 | `GET /api/reconciliation/**` | ❌ | ✅ | Laporan rekonsiliasi harian — admin only. |
 | `GET /api/audit/**` | ❌ | ✅ | Audit trail dan pencarian — admin only. |
 

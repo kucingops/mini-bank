@@ -6,6 +6,7 @@ import com.minibank.transaction.entity.Account;
 import com.minibank.transaction.entity.Transaction;
 import com.minibank.transaction.repository.AccountRepository;
 import com.minibank.transaction.repository.TransactionRepository;
+import com.minibank.transaction.security.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -14,6 +15,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.connection.stream.StreamRecords;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,7 +23,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -50,15 +51,14 @@ public class TransferService {
     private String transferRequestedStream;
 
     private static final String LOCK_PREFIX = "lock:account:";
-    private static final String DAILY_LIMIT_PREFIX = "daily-limit:";
-    private static final Duration DAILY_LIMIT_TTL = Duration.ofHours(24);
     private static final long LOCK_WAIT_SECONDS = 5;
     private static final long LOCK_LEASE_SECONDS = 10;
 
     /**
      * Process a transfer request:
-     * 1. Acquire distributed lock on both accounts
-     * 2. Check daily transfer limit (from Redis cache)
+     * 1. Verify the caller owns the source account
+     * 2. Acquire distributed lock on the source account
+     * 3. Check available balance (balance minus pending) and daily limit
      * 3. Insert PENDING transaction
      * 4. Publish TransferRequested event to Redis Stream
      * 5. Return 202 Accepted
@@ -66,24 +66,22 @@ public class TransferService {
     public TransferResponse initiateTransfer(TransferRequest request) {
         validateSameAccount(request);
 
-        // Get sorted lock keys to prevent deadlock
-        String lockKey1 = LOCK_PREFIX + min(request.getFromAccountId(), request.getToAccountId());
-        String lockKey2 = LOCK_PREFIX + max(request.getFromAccountId(), request.getToAccountId());
+        // Only the owner of the source account may move money out of it
+        if (!SecurityUtils.isOwner(request.getFromAccountId())) {
+            throw new AccessDeniedException("You can only transfer from your own account");
+        }
 
-        RLock lock1 = redissonClient.getLock(lockKey1);
-        RLock lock2 = redissonClient.getLock(lockKey2);
+        // Lock the source account: every check below (balance, pending, daily limit)
+        // is about the sender, so all transfers out of one account must be serialized,
+        // regardless of destination. Credits are atomic SQL and need no lock.
+        RLock lock = redissonClient.getLock(LOCK_PREFIX + request.getFromAccountId());
 
         try {
-            // Acquire distributed locks — prevents double spending
-            boolean locked1 = lock1.tryLock(LOCK_WAIT_SECONDS, LOCK_LEASE_SECONDS, TimeUnit.SECONDS);
-            boolean locked2 = lock2.tryLock(LOCK_WAIT_SECONDS, LOCK_LEASE_SECONDS, TimeUnit.SECONDS);
-
-            if (!locked1 || !locked2) {
-                throw new RuntimeException("Could not acquire locks for transfer. Please try again.");
+            if (!lock.tryLock(LOCK_WAIT_SECONDS, LOCK_LEASE_SECONDS, TimeUnit.SECONDS)) {
+                throw new RuntimeException("Could not acquire lock for transfer. Please try again.");
             }
 
-            log.info("Distributed lock acquired for accounts {} and {}",
-                    request.getFromAccountId(), request.getToAccountId());
+            log.info("Distributed lock acquired for source account {}", request.getFromAccountId());
 
             // Validate accounts exist and are active
             Account fromAccount = accountRepository.findById(request.getFromAccountId())
@@ -95,12 +93,14 @@ public class TransferService {
                 throw new RuntimeException("Both accounts must be ACTIVE");
             }
 
-            // Check balance
-            if (fromAccount.getBalance().compareTo(request.getAmount()) < 0) {
-                throw new RuntimeException("Insufficient balance. Available: " + fromAccount.getBalance());
+            // Check available balance — funds held by PENDING transfers are not spendable
+            BigDecimal pending = transactionRepository.sumPendingOutgoing(request.getFromAccountId());
+            BigDecimal available = fromAccount.getBalance().subtract(pending);
+            if (available.compareTo(request.getAmount()) < 0) {
+                throw new RuntimeException("Insufficient balance. Available: " + available);
             }
 
-            // Check daily transfer limit (Redis Cache)
+            // Check daily transfer limit (PENDING + COMPLETED today)
             checkDailyLimit(request.getFromAccountId(), request.getAmount(), fromAccount.getDailyTransferLimit());
 
             // Create PENDING transaction
@@ -128,9 +128,8 @@ public class TransferService {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Transfer interrupted", e);
         } finally {
-            if (lock1.isHeldByCurrentThread()) lock1.unlock();
-            if (lock2.isHeldByCurrentThread()) lock2.unlock();
-            log.debug("Distributed locks released");
+            if (lock.isHeldByCurrentThread()) lock.unlock();
+            log.debug("Distributed lock released");
         }
     }
 
@@ -140,6 +139,11 @@ public class TransferService {
     public TransferResponse getTransfer(UUID transactionId) {
         Transaction txn = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new RuntimeException("Transaction not found: " + transactionId));
+        if (!SecurityUtils.isAdmin()
+                && !SecurityUtils.isOwner(txn.getFromAccountId())
+                && !SecurityUtils.isOwner(txn.getToAccountId())) {
+            throw new AccessDeniedException("You do not have access to this transaction");
+        }
         return toResponse(txn);
     }
 
@@ -148,6 +152,7 @@ public class TransferService {
      * Demonstrates Java Stream API — filtering, sorting, and mapping.
      */
     public List<TransferResponse> getTransactionHistory(UUID accountId) {
+        SecurityUtils.requireOwnerOrAdmin(accountId);
         List<Transaction> transactions = transactionRepository
                 .findByFromAccountIdOrToAccountIdOrderByCreatedAtDesc(accountId, accountId);
 
@@ -162,11 +167,21 @@ public class TransferService {
     /**
      * Complete a validated transfer — called when fraud check passes.
      * Executes atomic debit and credit operations.
+     *
+     * Idempotent: the PENDING -> COMPLETED transition is a compare-and-set, so a
+     * redelivered or duplicated event finds the row no longer PENDING and does nothing.
+     * The row lock taken by that UPDATE also serializes concurrent duplicates.
      */
     @Transactional
     public void completeTransfer(UUID transactionId) {
         Transaction txn = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new RuntimeException("Transaction not found"));
+
+        int claimed = transactionRepository.transitionStatus(transactionId, "PENDING", "COMPLETED", "PASSED");
+        if (claimed == 0) {
+            log.warn("Transfer {} is no longer PENDING — ignoring duplicate completion event", txn.getReferenceNo());
+            return;
+        }
 
         // Atomic debit
         int debited = accountRepository.debitBalance(txn.getFromAccountId(), txn.getAmount());
@@ -178,12 +193,6 @@ public class TransferService {
 
         // Atomic credit
         accountRepository.creditBalance(txn.getToAccountId(), txn.getAmount());
-
-        // Update transaction status
-        transactionRepository.updateStatus(transactionId, "COMPLETED", "PASSED");
-
-        // Update daily limit cache
-        updateDailyLimitCache(txn.getFromAccountId(), txn.getAmount());
 
         // Invalidate balance cache
         invalidateBalanceCache(txn.getFromAccountId());
@@ -198,7 +207,11 @@ public class TransferService {
      */
     @Transactional
     public void rejectTransfer(UUID transactionId) {
-        transactionRepository.updateStatus(transactionId, "REJECTED", "FLAGGED");
+        int updated = transactionRepository.transitionStatus(transactionId, "PENDING", "REJECTED", "FLAGGED");
+        if (updated == 0) {
+            log.warn("Transfer {} is no longer PENDING — ignoring duplicate rejection event", transactionId);
+            return;
+        }
         log.warn("Transfer {} REJECTED by fraud detection", transactionId);
     }
 
@@ -228,40 +241,22 @@ public class TransferService {
                 transferRequestedStream, recordId);
     }
 
-    // ==================== Daily Limit (Redis Cache) ====================
+    // ==================== Daily Limit ====================
 
     /**
-     * Check daily transfer limit from Redis cache.
-     * Avoids querying the database for every transfer validation.
+     * Check the daily transfer limit. Always computed from the database (PENDING + COMPLETED
+     * transfers since midnight) while holding the source-account lock, so concurrent
+     * requests cannot each see a stale total and jointly exceed the limit.
      */
     private void checkDailyLimit(UUID accountId, BigDecimal transferAmount, BigDecimal dailyLimit) {
-        String cacheKey = DAILY_LIMIT_PREFIX + accountId + ":" + LocalDate.now();
-        Object cached = redisTemplate.opsForValue().get(cacheKey);
-
-        BigDecimal usedToday;
-        if (cached != null) {
-            usedToday = new BigDecimal(cached.toString());
-            log.debug("Daily limit cache HIT: {} already used today", usedToday);
-        } else {
-            // Cache miss — calculate from DB
-            LocalDateTime startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIN);
-            usedToday = transactionRepository.sumDailyTransfers(accountId, startOfDay);
-            log.debug("Daily limit cache MISS: {} calculated from DB", usedToday);
-        }
+        LocalDateTime startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIN);
+        BigDecimal usedToday = transactionRepository.sumDailyTransfers(accountId, startOfDay);
 
         if (usedToday.add(transferAmount).compareTo(dailyLimit) > 0) {
             throw new RuntimeException(String.format(
                     "Daily transfer limit exceeded. Limit: %s, Used today: %s, Requested: %s",
                     dailyLimit, usedToday, transferAmount));
         }
-    }
-
-    private void updateDailyLimitCache(UUID accountId, BigDecimal amount) {
-        String cacheKey = DAILY_LIMIT_PREFIX + accountId + ":" + LocalDate.now();
-        Object cached = redisTemplate.opsForValue().get(cacheKey);
-        BigDecimal newTotal = cached != null ?
-                new BigDecimal(cached.toString()).add(amount) : amount;
-        redisTemplate.opsForValue().set(cacheKey, newTotal.toString(), DAILY_LIMIT_TTL);
     }
 
     private void invalidateBalanceCache(UUID accountId) {
@@ -274,14 +269,6 @@ public class TransferService {
         if (request.getFromAccountId().equals(request.getToAccountId())) {
             throw new RuntimeException("Cannot transfer to the same account");
         }
-    }
-
-    private UUID min(UUID a, UUID b) {
-        return a.compareTo(b) <= 0 ? a : b;
-    }
-
-    private UUID max(UUID a, UUID b) {
-        return a.compareTo(b) >= 0 ? a : b;
     }
 
     private String generateReferenceNo() {

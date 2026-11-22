@@ -3,13 +3,16 @@ package com.minibank.fraud.listener;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.*;
+import org.springframework.data.redis.connection.RedisStreamCommands;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StreamOperations;
 
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -24,7 +27,8 @@ import java.util.function.Consumer;
  * - {@link #reclaim} periodically claims records that have been pending longer than
  *   {@code minIdle} (failed, or owned by a crashed instance) and retries them.
  * - After {@code maxDeliveries} attempts a record is copied to {@code <stream>:dlq} and
- *   acknowledged, so one poison message cannot block the stream forever.
+ *   acknowledged, so one poison message cannot block the stream forever. This also
+ *   covers payloads that cannot be deserialized at all.
  *
  * Handlers must therefore be idempotent.
  */
@@ -89,20 +93,28 @@ public class ReliableStreamConsumer {
             if (message.getElapsedTimeSinceLastDelivery().compareTo(minIdle) < 0) {
                 continue;
             }
-            List<MapRecord<String, Object, Object>> claimed =
-                    ops().claim(stream, group, consumerName, minIdle, message.getId());
+            if (message.getTotalDeliveryCount() >= maxDeliveries) {
+                deadLetter(stream, message);
+                continue;
+            }
+            List<MapRecord<String, Object, Object>> claimed;
+            try {
+                claimed = ops().claim(stream, group, consumerName, minIdle, message.getId());
+            } catch (Exception e) {
+                // Claimed on the server but the payload cannot be deserialized. The delivery
+                // count still went up, so it is dead-lettered once it reaches maxDeliveries.
+                log.error("Cannot read pending record {} on '{}' (delivery #{}): {}",
+                        message.getId(), stream, message.getTotalDeliveryCount() + 1, e.getMessage());
+                continue;
+            }
             if (claimed.isEmpty()) {
                 // Trimmed from the stream or claimed by another instance in the meantime
                 continue;
             }
             MapRecord<String, Object, Object> record = claimed.get(0);
-            if (message.getTotalDeliveryCount() >= maxDeliveries) {
-                deadLetter(stream, record, message.getTotalDeliveryCount());
-            } else {
-                log.info("Retrying record {} on '{}' (delivery #{})",
-                        record.getId(), stream, message.getTotalDeliveryCount() + 1);
-                process(stream, record, handler);
-            }
+            log.info("Retrying record {} on '{}' (delivery #{})",
+                    record.getId(), stream, message.getTotalDeliveryCount() + 1);
+            process(stream, record, handler);
         }
     }
 
@@ -118,17 +130,46 @@ public class ReliableStreamConsumer {
         }
     }
 
-    private void deadLetter(String stream, MapRecord<String, Object, Object> record, long deliveries) {
-        Map<Object, Object> payload = new HashMap<>(record.getValue());
-        payload.put("originalStream", stream);
-        payload.put("originalId", record.getId().getValue());
-        payload.put("deliveryCount", String.valueOf(deliveries));
-        payload.put("deadLetteredAt", LocalDateTime.now().toString());
+    /**
+     * Claims the record by ID only (no deserialization, so this works for malformed payloads),
+     * copies the raw entry to {@code <stream>:dlq} and acknowledges it.
+     */
+    private void deadLetter(String stream, PendingMessage message) {
+        RecordId id = message.getId();
+        byte[] key = stream.getBytes(StandardCharsets.UTF_8);
+        byte[] dlqKey = (stream + ":dlq").getBytes(StandardCharsets.UTF_8);
 
-        ops().add(StreamRecords.newRecord().in(stream + ":dlq").ofMap(payload));
-        ops().acknowledge(stream, group, record.getId());
-        log.error("Record {} on '{}' failed {} times — moved to '{}:dlq'",
-                record.getId(), stream, deliveries, stream);
+        Boolean moved = redisTemplate.execute((RedisCallback<Boolean>) connection -> {
+            List<RecordId> claimed = connection.streamCommands().xClaimJustId(key, group, consumerName,
+                    RedisStreamCommands.XClaimOptions.minIdle(minIdle).ids(id));
+            if (claimed == null || claimed.isEmpty()) {
+                return false; // claimed by another instance in the meantime
+            }
+
+            Map<byte[], byte[]> payload = new LinkedHashMap<>();
+            List<ByteRecord> raw = connection.streamCommands().xRange(key,
+                    Range.closed(id.getValue(), id.getValue()));
+            if (raw != null && !raw.isEmpty()) {
+                payload.putAll(raw.get(0).getValue());
+            }
+            payload.put(bytes("dlq.originalStream"), bytes(stream));
+            payload.put(bytes("dlq.originalId"), bytes(id.getValue()));
+            payload.put(bytes("dlq.deliveryCount"), bytes(String.valueOf(message.getTotalDeliveryCount())));
+            payload.put(bytes("dlq.deadLetteredAt"), bytes(LocalDateTime.now().toString()));
+
+            connection.streamCommands().xAdd(StreamRecords.newRecord().in(dlqKey).ofMap(payload));
+            connection.streamCommands().xAck(key, group, id);
+            return true;
+        });
+
+        if (Boolean.TRUE.equals(moved)) {
+            log.error("Record {} on '{}' failed {} times — moved to '{}:dlq'",
+                    id, stream, message.getTotalDeliveryCount(), stream);
+        }
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
     }
 
     private StreamOperations<String, Object, Object> ops() {
